@@ -129,6 +129,51 @@ async def stop_replay():
     return {"status": "stopped"}
 
 
+@app.get("/api/sessions")
+async def get_sessions():
+    return {"sessions": pipeline.get_all_sessions()}
+
+
+@app.get("/api/sessions/{session_id}/export")
+async def export_session(session_id: str):
+    data = pipeline.get_session_data(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    if pipeline.clear_session(session_id):
+        return {"status": "deleted", "session_id": session_id}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+@app.post("/api/sessions/{session_id}/replay")
+async def replay_session(session_id: str, lap_number: Optional[int] = None):
+    data = pipeline.get_session_data(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    laps = data.get("laps", {})
+    if not laps:
+        raise HTTPException(status_code=400, detail="No laps in session")
+    # If no lap specified, pick best lap or last lap
+    target_lap = lap_number
+    if target_lap is None:
+        best = None
+        best_time = float('inf')
+        for num, lap in laps.items():
+            if lap.get("best_lap_time") and lap["best_lap_time"] < best_time:
+                best_time = lap["best_lap_time"]
+                best = num
+        target_lap = best if best is not None else max(laps.keys())
+    lap_data = pipeline.get_lap_data(target_lap)
+    if not lap_data:
+        raise HTTPException(status_code=404, detail="Lap not found")
+    pipeline.start_replay(lap_data, 1.0)
+    return {"status": "started", "session_id": session_id, "lap_number": target_lap}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)

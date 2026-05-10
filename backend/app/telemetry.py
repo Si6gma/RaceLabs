@@ -45,6 +45,8 @@ class SessionState:
     weather: int = 0
     track_temp: int = 0
     air_temp: int = 0
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
 
 
 class TelemetryPipeline:
@@ -52,6 +54,7 @@ class TelemetryPipeline:
         self.decoder = F1Decoder()
         self.frame_buffer: Deque[Dict[str, Any]] = deque(maxlen=max_buffer_size)
         self.session_state: Optional[SessionState] = None
+        self._sessions_history: List[SessionState] = []
         self._listeners: List[Any] = []
         self._lock = asyncio.Lock()
         self._running = False
@@ -85,12 +88,20 @@ class TelemetryPipeline:
                 
             if "session" in frame_dict:
                 s = frame_dict["session"]
-                self.session_state.track = self._track_name(s.get("track_id", -1))
-                self.session_state.session_type = self._session_type_name(s.get("session_type", 0))
+                new_track = self._track_name(s.get("track_id", -1))
+                new_type = self._session_type_name(s.get("session_type", 0))
+                # Archive current session if track or session type changed
+                if self.session_state.track != "Unknown" and self.session_state.session_type != "Unknown":
+                    if (new_track != self.session_state.track or new_type != self.session_state.session_type):
+                        self._archive_session()
+                        self.session_state = SessionState(session_id=f"sess_{int(time.time())}")
+                self.session_state.track = new_track
+                self.session_state.session_type = new_type
                 self.session_state.total_laps = s.get("total_laps", 0)
                 self.session_state.weather = s.get("weather", 0)
                 self.session_state.track_temp = s.get("track_temperature", 0)
                 self.session_state.air_temp = s.get("air_temperature", 0)
+                self.session_state.updated_at = time.time()
                 
             if "lap" in frame_dict:
                 lap_num = frame_dict["lap"].get("current_lap_num", 0)
@@ -132,18 +143,83 @@ class TelemetryPipeline:
     def get_session_summary(self) -> Dict[str, Any]:
         if not self.session_state:
             return {}
+        return self._session_to_dict(self.session_state, active=True)
+
+    def get_all_sessions(self) -> List[Dict[str, Any]]:
+        sessions = []
+        for s in reversed(self._sessions_history):
+            sessions.append(self._session_to_dict(s, active=False))
+        if self.session_state and self.session_state.is_active:
+            sessions.insert(0, self._session_to_dict(self.session_state, active=True))
+        return sessions
+
+    def get_session_data(self, session_id: str) -> Optional[Dict[str, Any]]:
+        target = None
+        if self.session_state and self.session_state.session_id == session_id:
+            target = self.session_state
+        else:
+            for s in self._sessions_history:
+                if s.session_id == session_id:
+                    target = s
+                    break
+        if not target:
+            return None
         return {
-            "session_id": self.session_state.session_id,
-            "track": self.session_state.track,
-            "session_type": self.session_state.session_type,
-            "current_lap": self.session_state.current_lap,
-            "best_lap_time": self.session_state.best_lap_time,
-            "total_laps": self.session_state.total_laps,
-            "weather": self.session_state.weather,
-            "track_temp": self.session_state.track_temp,
-            "air_temp": self.session_state.air_temp,
-            "lap_count": len(self.session_state.lap_buffers),
-            "is_active": self.session_state.is_active,
+            "session_id": target.session_id,
+            "track": target.track,
+            "session_type": target.session_type,
+            "created_at": target.created_at,
+            "frames": [
+                frame
+                for lap in sorted(target.lap_buffers.keys())
+                for frame in target.lap_buffers[lap].frames
+            ],
+            "laps": {
+                lap_num: {
+                    "lap_number": lap_num,
+                    "frame_count": len(buf.frames),
+                    "best_lap_time": buf.best_lap_time,
+                    "valid": buf.valid,
+                }
+                for lap_num, buf in target.lap_buffers.items()
+            },
+        }
+
+    def clear_session(self, session_id: str) -> bool:
+        if self.session_state and self.session_state.session_id == session_id:
+            self.session_state = None
+            return True
+        for i, s in enumerate(self._sessions_history):
+            if s.session_id == session_id:
+                self._sessions_history.pop(i)
+                return True
+        return False
+
+    def _archive_session(self):
+        if self.session_state:
+            self.session_state.is_active = False
+            self._sessions_history.append(self.session_state)
+            # Keep only last 50 sessions
+            if len(self._sessions_history) > 50:
+                self._sessions_history = self._sessions_history[-50:]
+
+    @staticmethod
+    def _session_to_dict(session: SessionState, active: bool = False) -> Dict[str, Any]:
+        return {
+            "session_id": session.session_id,
+            "track": session.track,
+            "session_type": session.session_type,
+            "current_lap": session.current_lap,
+            "best_lap_time": session.best_lap_time,
+            "total_laps": session.total_laps,
+            "weather": session.weather,
+            "track_temp": session.track_temp,
+            "air_temp": session.air_temp,
+            "lap_count": len(session.lap_buffers),
+            "is_active": session.is_active,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "status": "active" if active else "completed",
         }
         
     def start_replay(self, lap_data: List[Dict[str, Any]], speed: float = 1.0):

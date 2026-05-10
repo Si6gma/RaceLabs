@@ -20,7 +20,7 @@ class Session(Base):
     weather = Column(String)
     track_temp = Column(Float)
     air_temp = Column(Float)
-    metadata = Column(JSON, default=dict)
+    extra_data = Column(JSON, default=dict)
 
     laps = relationship("Lap", back_populates="session", cascade="all, delete-orphan")
 
@@ -42,7 +42,7 @@ class Lap(Base):
     fuel_at_start = Column(Float)
     fuel_at_end = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
-    metadata = Column(JSON, default=dict)
+    extra_data = Column(JSON, default=dict)
 
     session = relationship("Session", back_populates="laps")
 

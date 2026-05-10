@@ -76,7 +76,7 @@ class ImportedSession(Base):
     sample_count = Column(BigInteger, default=0)
     lap_count = Column(Integer, default=0)
     best_lap_time_ms = Column(Integer)
-    metadata = Column(JSON, default=dict)
+    extra_data = Column(JSON, default=dict)
     status = Column(String, default="active")  # active, archived
 
     laps = relationship("ImportedLap", back_populates="session", cascade="all, delete-orphan")
@@ -100,7 +100,7 @@ class ImportedLap(Base):
     max_speed = Column(Float)
     avg_speed = Column(Float)
     min_speed = Column(Float)
-    metadata = Column(JSON, default=dict)
+    extra_data = Column(JSON, default=dict)
 
     session = relationship("ImportedSession", back_populates="laps")
     samples = relationship("TelemetrySample", back_populates="lap")

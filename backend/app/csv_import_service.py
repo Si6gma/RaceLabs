@@ -95,7 +95,7 @@ class CSVImportService:
             sample_count=metadata.get("total_samples", 0),
             lap_count=metadata.get("lap_count", 0),
             best_lap_time_ms=metadata.get("best_lap_time_ms"),
-            metadata={
+            extra_data={
                 "import_version": "1.0",
                 "source": "csv",
                 "original_file": file_name,
@@ -128,7 +128,7 @@ class CSVImportService:
                 max_speed=lap.max_speed,
                 avg_speed=lap.avg_speed,
                 min_speed=lap.min_speed,
-                metadata={
+                extra_data={
                     "sample_count": len(lap.samples),
                 },
             )
@@ -215,7 +215,7 @@ class CSVImportService:
                 "lap_count": s.lap_count,
                 "best_lap_time_ms": s.best_lap_time_ms,
                 "status": s.status,
-                "metadata": s.metadata,
+                "extra_data": s.extra_data,
             }
             for s in sessions
         ]
@@ -251,7 +251,7 @@ class CSVImportService:
             "lap_count": session.lap_count,
             "best_lap_time_ms": session.best_lap_time_ms,
             "status": session.status,
-            "metadata": session.metadata,
+            "extra_data": session.extra_data,
             "laps": [
                 {
                     "id": str(lap.id),

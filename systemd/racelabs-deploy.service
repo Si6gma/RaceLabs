@@ -1,0 +1,11 @@
+[Unit]
+Description=RaceLabs Auto Deploy
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/server/Projects/RaceLabs
+ExecStart=/home/server/Projects/RaceLabs/scripts/auto-deploy.sh
+User=server
+Group=server

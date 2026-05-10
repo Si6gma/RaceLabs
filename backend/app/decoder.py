@@ -28,6 +28,31 @@ class PacketType(IntEnum):
     MOTION_EX = 13
 
 
+class DriverStatus(IntEnum):
+    IN_GARAGE = 0
+    FLYING_LAP = 1
+    IN_LAP = 2
+    OUT_LAP = 3
+    ON_TRACK = 4
+
+
+class PitStatus(IntEnum):
+    NONE = 0
+    PITTING = 1
+    IN_PIT_AREA = 2
+
+
+class ResultStatus(IntEnum):
+    INVALID = 0
+    INACTIVE = 1
+    ACTIVE = 2
+    FINISHED = 3
+    DID_NOT_FINISH = 4
+    DISQUALIFIED = 5
+    NOT_CLASSIFIED = 6
+    RETIRED = 7
+
+
 @dataclass
 class MotionData:
     speed: float = 0.0
@@ -56,19 +81,83 @@ class LapData:
     last_lap_time_ms: int = 0
     current_lap_time_ms: int = 0
     sector1_time_ms: int = 0
+    sector1_time_minutes: int = 0
     sector2_time_ms: int = 0
+    sector2_time_minutes: int = 0
+    delta_to_car_in_front_ms: int = 0
+    delta_to_race_leader_ms: int = 0
     lap_distance: float = 0.0
     total_distance: float = 0.0
     safety_car_delta: float = 0.0
     car_position: int = 0
     current_lap_num: int = 0
     pit_status: int = 0
+    num_pit_stops: int = 0
     sector: int = 0
     current_lap_invalid: bool = False
     penalties: int = 0
+    total_warnings: int = 0
+    corner_cutting_warnings: int = 0
+    num_unserved_drive_through_pens: int = 0
+    num_unserved_stop_go_pens: int = 0
     grid_position: int = 0
     driver_status: int = 0
     result_status: int = 0
+    pit_lane_timer_active: int = 0
+    pit_lane_time_in_lane_in_ms: int = 0
+    pit_stop_timer_in_ms: int = 0
+    pit_stop_should_serve_pen: int = 0
+
+    @property
+    def is_in_pits(self) -> bool:
+        return self.pit_status in (PitStatus.PITTING, PitStatus.IN_PIT_AREA)
+
+    @property
+    def is_on_flying_lap(self) -> bool:
+        return self.driver_status == DriverStatus.FLYING_LAP
+
+    @property
+    def is_out_lap(self) -> bool:
+        return self.driver_status == DriverStatus.OUT_LAP
+
+    @property
+    def is_in_lap(self) -> bool:
+        return self.driver_status == DriverStatus.IN_LAP
+
+    @property
+    def is_in_garage(self) -> bool:
+        return self.driver_status == DriverStatus.IN_GARAGE
+
+    @property
+    def is_on_track(self) -> bool:
+        return self.driver_status == DriverStatus.ON_TRACK
+
+    @property
+    def is_active(self) -> bool:
+        return self.result_status in (ResultStatus.ACTIVE, ResultStatus.FINISHED)
+
+    @property
+    def lap_phase(self) -> str:
+        """Return a human-readable lap phase."""
+        if self.is_in_garage:
+            return "garage"
+        if self.is_in_pits:
+            return "pitting"
+        if self.pit_lane_timer_active:
+            return "pit_lane"
+        if self.is_out_lap:
+            return "out_lap"
+        if self.is_in_lap:
+            return "in_lap"
+        if self.is_on_flying_lap:
+            return "flying_lap"
+        if self.is_on_track:
+            return "on_track"
+        if self.result_status == ResultStatus.INVALID:
+            return "invalid"
+        if self.result_status == ResultStatus.INACTIVE:
+            return "inactive"
+        return "unknown"
 
 
 @dataclass
@@ -174,6 +263,7 @@ class TelemetryFrame:
     packet_id: int = 0
     session_time: float = 0.0
     frame_identifier: int = 0
+    overall_frame_identifier: int = 0
     player_car_index: int = 0
     secondary_player_car_index: int = 0
     motion: Optional[MotionData] = None
@@ -186,7 +276,10 @@ class TelemetryFrame:
 
 
 class F1Decoder:
-    HEADER_FORMAT = '<H4BQfI2B'
+    # F1 23/24 header: m_packetFormat(2), m_gameYear(1), m_gameMajorVersion(1), m_gameMinorVersion(1),
+    # m_packetVersion(1), m_packetId(1), m_sessionUID(8), m_sessionTime(4), m_frameIdentifier(4),
+    # m_overallFrameIdentifier(4), m_playerCarIndex(1), m_secondaryPlayerCarIndex(1)
+    HEADER_FORMAT = '<H5BQf2I2B'
     HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
     PACKET_TYPES = {
         0: PacketType.MOTION,
@@ -207,17 +300,23 @@ class F1Decoder:
 
             header = struct.unpack_from(self.HEADER_FORMAT, data)
             packet_format = header[0]
-            game_year = header[5]
-            packet_type = header[6]
+            game_year = header[1]
+            game_major = header[2]
+            game_minor = header[3]
+            packet_version = header[4]
+            packet_type = header[5]
+            session_uid = header[6]
             session_time = header[7]
             frame_id = header[8]
-            player_car = header[9]
-            secondary_car = header[10]
+            overall_frame_id = header[9]
+            player_car = header[10]
+            secondary_car = header[11]
 
             frame = TelemetryFrame(
                 packet_id=packet_type,
                 session_time=session_time,
                 frame_identifier=frame_id,
+                overall_frame_identifier=overall_frame_id,
                 player_car_index=player_car,
                 secondary_player_car_index=secondary_car,
             )
@@ -253,138 +352,213 @@ class F1Decoder:
         return m
 
     def _decode_lap_data(self, data: bytes, player_idx: int) -> LapData:
-        offset = self.HEADER_SIZE + (player_idx * 53)
+        # LapData per car: 50 bytes (F1 23 spec)
+        # Group adjacent same-type fields to minimize struct calls (10 vs 28)
+        offset = self.HEADER_SIZE + (player_idx * 50)
         try:
+            d0 = struct.unpack_from('<2I', data, offset)        # 0-7
+            d1 = struct.unpack_from('<H', data, offset + 8)     # 8-9
+            d2 = struct.unpack_from('<B', data, offset + 10)    # 10
+            d3 = struct.unpack_from('<H', data, offset + 11)    # 11-12
+            d4 = struct.unpack_from('<B', data, offset + 13)    # 13
+            d5 = struct.unpack_from('<2H', data, offset + 14)   # 14-17
+            d6 = struct.unpack_from('<3f', data, offset + 18)   # 18-29
+            d7 = struct.unpack_from('<15B', data, offset + 30)  # 30-44
+            d8 = struct.unpack_from('<2H', data, offset + 45)   # 45-48
+            d9 = struct.unpack_from('<B', data, offset + 49)    # 49
             return LapData(
-                last_lap_time_ms=int(struct.unpack_from('<I', data, offset)[0]),
-                current_lap_time_ms=int(struct.unpack_from('<I', data, offset+4)[0]),
-                sector1_time_ms=int(struct.unpack_from('<H', data, offset+12)[0]),
-                sector2_time_ms=int(struct.unpack_from('<H', data, offset+14)[0]),
-                lap_distance=struct.unpack_from('<f', data, offset+16)[0],
-                total_distance=struct.unpack_from('<f', data, offset+20)[0],
-                safety_car_delta=struct.unpack_from('<f', data, offset+24)[0],
-                car_position=struct.unpack_from('<B', data, offset+28)[0],
-                current_lap_num=struct.unpack_from('<B', data, offset+29)[0],
-                pit_status=struct.unpack_from('<B', data, offset+30)[0],
-                sector=struct.unpack_from('<B', data, offset+31)[0],
-                current_lap_invalid=struct.unpack_from('<B', data, offset+32)[0] > 0,
-                penalties=struct.unpack_from('<B', data, offset+33)[0],
-                grid_position=struct.unpack_from('<B', data, offset+38)[0],
-                driver_status=struct.unpack_from('<B', data, offset+39)[0],
-                result_status=struct.unpack_from('<B', data, offset+40)[0],
+                last_lap_time_ms=d0[0],
+                current_lap_time_ms=d0[1],
+                sector1_time_ms=d1[0],
+                sector1_time_minutes=d2[0],
+                sector2_time_ms=d3[0],
+                sector2_time_minutes=d4[0],
+                delta_to_car_in_front_ms=d5[0],
+                delta_to_race_leader_ms=d5[1],
+                lap_distance=d6[0],
+                total_distance=d6[1],
+                safety_car_delta=d6[2],
+                car_position=d7[0],
+                current_lap_num=d7[1],
+                pit_status=d7[2],
+                num_pit_stops=d7[3],
+                sector=d7[4],
+                current_lap_invalid=d7[5] > 0,
+                penalties=d7[6],
+                total_warnings=d7[7],
+                corner_cutting_warnings=d7[8],
+                num_unserved_drive_through_pens=d7[9],
+                num_unserved_stop_go_pens=d7[10],
+                grid_position=d7[11],
+                driver_status=d7[12],
+                result_status=d7[13],
+                pit_lane_timer_active=d7[14],
+                pit_lane_time_in_lane_in_ms=d8[0],
+                pit_stop_timer_in_ms=d8[1],
+                pit_stop_should_serve_pen=d9[0],
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Lap data decode error: {e}")
             return LapData()
 
     def _decode_car_telemetry(self, data: bytes, player_idx: int) -> CarTelemetry:
+        # CarTelemetry per car: 58 bytes
+        # Group adjacent same-type fields to minimize struct calls
         offset = self.HEADER_SIZE + (player_idx * 58)
         try:
+            d0 = struct.unpack_from('<H', data, offset)         # 0-1 (speed)
+            d1 = struct.unpack_from('<3f', data, offset + 2)    # 2-13 (throttle, steer, brake)
+            d2 = struct.unpack_from('<B', data, offset + 14)    # 14 (clutch)
+            d3 = struct.unpack_from('<b', data, offset + 15)    # 15 (gear)
+            d4 = struct.unpack_from('<H', data, offset + 16)    # 16-17 (engine_rpm)
+            d5 = struct.unpack_from('<2B', data, offset + 18)   # 18-19 (drs, rev_lights_percent)
+            d6 = struct.unpack_from('<H', data, offset + 20)    # 20-21 (rev_lights_bit_value)
+            d7 = struct.unpack_from('<4H', data, offset + 22)   # 22-29 (brakes_temp)
+            d8 = struct.unpack_from('<4B', data, offset + 30)   # 30-33 (tyres_surface_temp)
+            d9 = struct.unpack_from('<4B', data, offset + 34)   # 34-37 (tyres_inner_temp)
+            d10 = struct.unpack_from('<H', data, offset + 38)   # 38-39 (engine_temp)
+            d11 = struct.unpack_from('<4f', data, offset + 40)  # 40-55 (tyres_pressure)
+            d12 = struct.unpack_from('<4B', data, offset + 56)  # 56-59 (surface_type)
             return CarTelemetry(
-                speed=struct.unpack_from('<H', data, offset)[0],
-                throttle=struct.unpack_from('<f', data, offset+2)[0],
-                steer=struct.unpack_from('<f', data, offset+6)[0],
-                brake=struct.unpack_from('<f', data, offset+10)[0],
-                clutch=struct.unpack_from('<B', data, offset+14)[0],
-                gear=struct.unpack_from('<b', data, offset+15)[0],
-                engine_rpm=struct.unpack_from('<H', data, offset+16)[0],
-                drs=struct.unpack_from('<B', data, offset+18)[0],
-                rev_lights_percent=struct.unpack_from('<B', data, offset+19)[0],
-                rev_lights_bit_value=struct.unpack_from('<H', data, offset+20)[0],
-                brakes_temp=list(struct.unpack_from('<4H', data, offset+22)),
-                tyres_surface_temp=list(struct.unpack_from('<4B', data, offset+30)),
-                tyres_inner_temp=list(struct.unpack_from('<4B', data, offset+34)),
-                engine_temp=struct.unpack_from('<H', data, offset+38)[0],
-                tyres_pressure=list(struct.unpack_from('<4f', data, offset+40)),
-                surface_type=list(struct.unpack_from('<4B', data, offset+56)),
+                speed=d0[0],
+                throttle=d1[0],
+                steer=d1[1],
+                brake=d1[2],
+                clutch=d2[0],
+                gear=d3[0],
+                engine_rpm=d4[0],
+                drs=d5[0],
+                rev_lights_percent=d5[1],
+                rev_lights_bit_value=d6[0],
+                brakes_temp=list(d7),
+                tyres_surface_temp=list(d8),
+                tyres_inner_temp=list(d9),
+                engine_temp=d10[0],
+                tyres_pressure=list(d11),
+                surface_type=list(d12),
             )
         except Exception:
             return CarTelemetry()
 
     def _decode_car_status(self, data: bytes, player_idx: int) -> CarStatus:
+        # CarStatus per car: 60 bytes of actual fields (game struct is 61)
+        # Group adjacent same-type fields to minimize struct calls
         offset = self.HEADER_SIZE + (player_idx * 61)
         try:
+            d0 = struct.unpack_from('<5B', data, offset)        # 0-4
+            d1 = struct.unpack_from('<3f', data, offset + 5)    # 5-16
+            d2 = struct.unpack_from('<2H', data, offset + 17)   # 17-20
+            d3 = struct.unpack_from('<B', data, offset + 21)    # 21
+            d4 = struct.unpack_from('<B', data, offset + 22)    # 22
+            d5 = struct.unpack_from('<H', data, offset + 23)    # 23-24
+            d6 = struct.unpack_from('<4B', data, offset + 25)   # 25-28
+            d7 = struct.unpack_from('<3B', data, offset + 29)   # 29-31
+            d8 = struct.unpack_from('<4B', data, offset + 32)   # 32-35
+            d9 = struct.unpack_from('<7B', data, offset + 36)   # 36-42
+            d10 = struct.unpack_from('<f', data, offset + 43)   # 43-46
+            d11 = struct.unpack_from('<B', data, offset + 47)   # 47
+            d12 = struct.unpack_from('<3f', data, offset + 48)  # 48-59
             return CarStatus(
-                traction_control=struct.unpack_from('<B', data, offset)[0],
-                anti_lock_brakes=struct.unpack_from('<B', data, offset+1)[0],
-                fuel_mix=struct.unpack_from('<B', data, offset+2)[0],
-                front_brake_bias=struct.unpack_from('<B', data, offset+3)[0],
-                pit_limiter_status=struct.unpack_from('<B', data, offset+4)[0],
-                fuel_in_tank=struct.unpack_from('<f', data, offset+5)[0],
-                fuel_capacity=struct.unpack_from('<f', data, offset+9)[0],
-                fuel_remaining_laps=struct.unpack_from('<f', data, offset+13)[0],
-                max_rpm=struct.unpack_from('<H', data, offset+17)[0],
-                idle_rpm=struct.unpack_from('<H', data, offset+19)[0],
-                max_gears=struct.unpack_from('<B', data, offset+21)[0],
-                drs_allowed=struct.unpack_from('<B', data, offset+22)[0],
-                drs_activation_distance=struct.unpack_from('<H', data, offset+23)[0],
-                tyres_wear=list(struct.unpack_from('<4B', data, offset+25)),
-                actual_tyre_compound=struct.unpack_from('<B', data, offset+29)[0],
-                visual_tyre_compound=struct.unpack_from('<B', data, offset+30)[0],
-                tyres_age_laps=struct.unpack_from('<B', data, offset+31)[0],
-                tyres_damage=list(struct.unpack_from('<4B', data, offset+32)),
-                front_left_wing_damage=struct.unpack_from('<B', data, offset+36)[0],
-                front_right_wing_damage=struct.unpack_from('<B', data, offset+37)[0],
-                rear_wing_damage=struct.unpack_from('<B', data, offset+38)[0],
-                drs_fault=struct.unpack_from('<B', data, offset+39)[0],
-                engine_damage=struct.unpack_from('<B', data, offset+40)[0],
-                gearbox_damage=struct.unpack_from('<B', data, offset+41)[0],
-                vehicle_fia_flags=struct.unpack_from('<B', data, offset+42)[0],
-                ers_store_energy=struct.unpack_from('<f', data, offset+43)[0],
-                ers_deploy_mode=struct.unpack_from('<B', data, offset+47)[0],
-                ers_harvested_this_lap_mguk=struct.unpack_from('<f', data, offset+48)[0],
-                ers_harvested_this_lap_mguh=struct.unpack_from('<f', data, offset+52)[0],
-                ers_deployed_this_lap=struct.unpack_from('<f', data, offset+56)[0],
+                traction_control=d0[0],
+                anti_lock_brakes=d0[1],
+                fuel_mix=d0[2],
+                front_brake_bias=d0[3],
+                pit_limiter_status=d0[4],
+                fuel_in_tank=d1[0],
+                fuel_capacity=d1[1],
+                fuel_remaining_laps=d1[2],
+                max_rpm=d2[0],
+                idle_rpm=d2[1],
+                max_gears=d3[0],
+                drs_allowed=d4[0],
+                drs_activation_distance=d5[0],
+                tyres_wear=list(d6),
+                actual_tyre_compound=d7[0],
+                visual_tyre_compound=d7[1],
+                tyres_age_laps=d7[2],
+                tyres_damage=list(d8),
+                front_left_wing_damage=d9[0],
+                front_right_wing_damage=d9[1],
+                rear_wing_damage=d9[2],
+                drs_fault=d9[3],
+                engine_damage=d9[4],
+                gearbox_damage=d9[5],
+                vehicle_fia_flags=d9[6],
+                ers_store_energy=d10[0],
+                ers_deploy_mode=d11[0],
+                ers_harvested_this_lap_mguk=d12[0],
+                ers_harvested_this_lap_mguh=d12[1],
+                ers_deployed_this_lap=d12[2],
             )
         except Exception:
             return CarStatus()
 
     def _decode_car_damage(self, data: bytes, player_idx: int) -> CarDamage:
+        # CarDamage per car: 35 bytes of actual fields (game struct is 39)
+        # Group adjacent same-type fields to minimize struct calls
         offset = self.HEADER_SIZE + (player_idx * 39)
         try:
+            d0 = struct.unpack_from('<4f', data, offset)        # 0-15
+            d1 = struct.unpack_from('<4B', data, offset + 16)   # 16-19
+            d2 = struct.unpack_from('<15B', data, offset + 20)  # 20-34
             return CarDamage(
-                tyres_wear=list(struct.unpack_from('<4f', data, offset)),
-                tyres_damage=list(struct.unpack_from('<4B', data, offset+16)),
-                front_left_wing_damage=struct.unpack_from('<B', data, offset+20)[0],
-                front_right_wing_damage=struct.unpack_from('<B', data, offset+21)[0],
-                rear_wing_damage=struct.unpack_from('<B', data, offset+22)[0],
-                floor_damage=struct.unpack_from('<B', data, offset+23)[0],
-                diffuser_damage=struct.unpack_from('<B', data, offset+24)[0],
-                sidepod_damage=struct.unpack_from('<B', data, offset+25)[0],
-                drs_fault=struct.unpack_from('<B', data, offset+26)[0],
-                gear_box_damage=struct.unpack_from('<B', data, offset+27)[0],
-                engine_damage=struct.unpack_from('<B', data, offset+28)[0],
-                engine_mguh_wear=struct.unpack_from('<B', data, offset+29)[0],
-                engine_es_wear=struct.unpack_from('<B', data, offset+30)[0],
-                engine_ce_wear=struct.unpack_from('<B', data, offset+31)[0],
-                engine_ice_wear=struct.unpack_from('<B', data, offset+32)[0],
-                engine_mguk_wear=struct.unpack_from('<B', data, offset+33)[0],
-                engine_tc_wear=struct.unpack_from('<B', data, offset+34)[0],
+                tyres_wear=list(d0),
+                tyres_damage=list(d1),
+                front_left_wing_damage=d2[0],
+                front_right_wing_damage=d2[1],
+                rear_wing_damage=d2[2],
+                floor_damage=d2[3],
+                diffuser_damage=d2[4],
+                sidepod_damage=d2[5],
+                drs_fault=d2[6],
+                gear_box_damage=d2[7],
+                engine_damage=d2[8],
+                engine_mguh_wear=d2[9],
+                engine_es_wear=d2[10],
+                engine_ce_wear=d2[11],
+                engine_ice_wear=d2[12],
+                engine_mguk_wear=d2[13],
+                engine_tc_wear=d2[14],
             )
         except Exception:
             return CarDamage()
 
     def _decode_session(self, data: bytes) -> SessionData:
+        # Session data: sparse fields with gaps (marshal zones, etc.)
+        # Group adjacent same-type fields where possible
         offset = self.HEADER_SIZE
         try:
+            d0 = struct.unpack_from('<B', data, offset)         # 0 (weather)
+            d1 = struct.unpack_from('<2b', data, offset + 1)    # 1-2 (track_temp, air_temp)
+            d2 = struct.unpack_from('<B', data, offset + 3)     # 3 (total_laps)
+            d3 = struct.unpack_from('<H', data, offset + 4)     # 4-5 (track_length)
+            d4 = struct.unpack_from('<B', data, offset + 6)     # 6 (session_type)
+            d5 = struct.unpack_from('<b', data, offset + 7)     # 7 (track_id)
+            d6 = struct.unpack_from('<B', data, offset + 8)     # 8 (formula)
+            d7 = struct.unpack_from('<2H', data, offset + 9)    # 9-12 (session_time_left, session_duration)
+            d8 = struct.unpack_from('<5B', data, offset + 13)   # 13-17 (pit_speed_limit, game_paused, is_spectating, spectator_car_index, sli_pro_native_support)
+            d9 = struct.unpack_from('<B', data, offset + 18)    # 18 (num_marshal_zones)
+            d10 = struct.unpack_from('<B', data, offset + 49)   # 49 (safety_car_status)
+            d11 = struct.unpack_from('<B', data, offset + 50)   # 50 (network_game)
             return SessionData(
-                weather=struct.unpack_from('<B', data, offset)[0],
-                track_temperature=struct.unpack_from('<b', data, offset+1)[0],
-                air_temperature=struct.unpack_from('<b', data, offset+2)[0],
-                total_laps=struct.unpack_from('<B', data, offset+3)[0],
-                track_length=struct.unpack_from('<H', data, offset+4)[0],
-                session_type=struct.unpack_from('<B', data, offset+6)[0],
-                track_id=struct.unpack_from('<b', data, offset+7)[0],
-                formula=struct.unpack_from('<B', data, offset+8)[0],
-                session_time_left=struct.unpack_from('<H', data, offset+9)[0],
-                session_duration=struct.unpack_from('<H', data, offset+11)[0],
-                pit_speed_limit=struct.unpack_from('<B', data, offset+13)[0],
-                game_paused=struct.unpack_from('<B', data, offset+14)[0],
-                is_spectating=struct.unpack_from('<B', data, offset+15)[0],
-                spectator_car_index=struct.unpack_from('<B', data, offset+16)[0],
-                sli_pro_native_support=struct.unpack_from('<B', data, offset+17)[0],
-                num_marshal_zones=struct.unpack_from('<B', data, offset+18)[0],
-                safety_car_status=struct.unpack_from('<B', data, offset+49)[0],
-                network_game=struct.unpack_from('<B', data, offset+50)[0],
+                weather=d0[0],
+                track_temperature=d1[0],
+                air_temperature=d1[1],
+                total_laps=d2[0],
+                track_length=d3[0],
+                session_type=d4[0],
+                track_id=d5[0],
+                formula=d6[0],
+                session_time_left=d7[0],
+                session_duration=d7[1],
+                pit_speed_limit=d8[0],
+                game_paused=d8[1],
+                is_spectating=d8[2],
+                spectator_car_index=d8[3],
+                sli_pro_native_support=d8[4],
+                num_marshal_zones=d9[0],
+                safety_car_status=d10[0],
+                network_game=d11[0],
             )
         except Exception:
             return SessionData()
@@ -394,13 +568,15 @@ class F1Decoder:
             "packet_id": frame.packet_id,
             "session_time": frame.session_time,
             "frame_identifier": frame.frame_identifier,
+            "overall_frame_identifier": frame.overall_frame_identifier,
             "player_car_index": frame.player_car_index,
             "timestamp": frame.timestamp,
         }
 
         if frame.motion:
+            telem = frame.telemetry
             result["motion"] = {
-                "speed": getattr(frame, 'telemetry', None) and getattr(frame.telemetry, 'speed', 0) or 0,
+                "speed": telem.speed if telem is not None else 0,
                 "world_pos_x": frame.motion.world_pos_x,
                 "world_pos_y": frame.motion.world_pos_y,
                 "world_pos_z": frame.motion.world_pos_z,
@@ -414,21 +590,37 @@ class F1Decoder:
             }
 
         if frame.lap:
+            lap = frame.lap
             result["lap"] = {
-                "last_lap_time_ms": frame.lap.last_lap_time_ms,
-                "current_lap_time_ms": frame.lap.current_lap_time_ms,
-                "sector1_time_ms": frame.lap.sector1_time_ms,
-                "sector2_time_ms": frame.lap.sector2_time_ms,
-                "lap_distance": frame.lap.lap_distance,
-                "total_distance": frame.lap.total_distance,
-                "car_position": frame.lap.car_position,
-                "current_lap_num": frame.lap.current_lap_num,
-                "pit_status": frame.lap.pit_status,
-                "sector": frame.lap.sector,
-                "current_lap_invalid": frame.lap.current_lap_invalid,
-                "penalties": frame.lap.penalties,
-                "driver_status": frame.lap.driver_status,
-                "result_status": frame.lap.result_status,
+                "last_lap_time_ms": lap.last_lap_time_ms,
+                "current_lap_time_ms": lap.current_lap_time_ms,
+                "sector1_time_ms": lap.sector1_time_ms,
+                "sector2_time_ms": lap.sector2_time_ms,
+                "lap_distance": lap.lap_distance,
+                "total_distance": lap.total_distance,
+                "car_position": lap.car_position,
+                "current_lap_num": lap.current_lap_num,
+                "pit_status": lap.pit_status,
+                "num_pit_stops": lap.num_pit_stops,
+                "sector": lap.sector,
+                "current_lap_invalid": lap.current_lap_invalid,
+                "penalties": lap.penalties,
+                "total_warnings": lap.total_warnings,
+                "corner_cutting_warnings": lap.corner_cutting_warnings,
+                "driver_status": lap.driver_status,
+                "result_status": lap.result_status,
+                "grid_position": lap.grid_position,
+                "pit_lane_timer_active": lap.pit_lane_timer_active,
+                "pit_lane_time_in_lane_in_ms": lap.pit_lane_time_in_lane_in_ms,
+                "pit_stop_timer_in_ms": lap.pit_stop_timer_in_ms,
+                "lap_phase": lap.lap_phase,
+                "is_in_pits": lap.is_in_pits,
+                "is_on_flying_lap": lap.is_on_flying_lap,
+                "is_out_lap": lap.is_out_lap,
+                "is_in_lap": lap.is_in_lap,
+                "is_in_garage": lap.is_in_garage,
+                "is_on_track": lap.is_on_track,
+                "is_active": lap.is_active,
             }
 
         if frame.telemetry:
@@ -447,6 +639,7 @@ class F1Decoder:
                 "tyres_inner_temp": frame.telemetry.tyres_inner_temp,
                 "engine_temp": frame.telemetry.engine_temp,
                 "tyres_pressure": [round(p, 2) for p in frame.telemetry.tyres_pressure],
+                "surface_type": frame.telemetry.surface_type,
             }
 
         if frame.status:
@@ -455,6 +648,7 @@ class F1Decoder:
                 "fuel_capacity": round(frame.status.fuel_capacity, 2),
                 "fuel_remaining_laps": round(frame.status.fuel_remaining_laps, 2),
                 "drs_allowed": frame.status.drs_allowed,
+                "pit_limiter_status": frame.status.pit_limiter_status,
                 "tyres_wear": frame.status.tyres_wear,
                 "tyre_compound": frame.status.visual_tyre_compound,
                 "tyres_age_laps": frame.status.tyres_age_laps,

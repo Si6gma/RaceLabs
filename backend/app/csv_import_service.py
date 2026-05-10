@@ -104,10 +104,12 @@ class CSVImportService:
         )
         
         self.db.add(session)
-        await self.db.flush()  # Get session ID
         
-        # Store laps
+        # Store laps and samples in batches to minimize DB roundtrips
         lap_count = len(laps)
+        sample_flush_threshold = 2000  # Flush samples every N records
+        total_samples_added = 0
+        
         for i, lap in enumerate(laps):
             progress = 65 + int((i / max(lap_count, 1)) * 20)
             yield {
@@ -130,13 +132,16 @@ class CSVImportService:
                 min_speed=lap.min_speed,
                 extra_data={
                     "sample_count": len(lap.samples),
+                    "is_out_lap": lap.is_out_lap,
+                    "is_flying_lap": lap.is_flying_lap,
+                    "is_in_lap": lap.is_in_lap,
+                    "is_pit_lap": lap.is_pit_lap,
+                    "phases_seen": ["out_lap"] if lap.is_out_lap else (["flying_lap"] if lap.is_flying_lap else (["in_lap"] if lap.is_in_lap else ["unknown"])),
                 },
             )
             self.db.add(lap_record)
-            await self.db.flush()
             
-            # Store samples in batches
-            sample_batch = []
+            # Buffer samples and flush in batches
             for sample in lap.samples:
                 sample_record = TelemetrySample(
                     id=uuid.uuid4(),
@@ -170,9 +175,12 @@ class CSVImportService:
                     cumulative_distance=sample.cumulative_distance,
                     trajectory_curvature=sample.trajectory_curvature,
                 )
-                sample_batch.append(sample_record)
-            
-            self.db.add_all(sample_batch)
+                self.db.add(sample_record)
+                total_samples_added += 1
+                
+                if total_samples_added >= sample_flush_threshold:
+                    await self.db.flush()
+                    total_samples_added = 0
         
         await self.db.commit()
         

@@ -87,16 +87,21 @@ async def get_laps():
     for lap_num, frames in laps.items():
         if not frames:
             continue
-        last_frame = frames[-1]
-        lap_data = last_frame.get("lap", {})
-        summary[lap_num] = {
-            "lap_number": lap_num,
-            "lap_time_ms": lap_data.get("last_lap_time_ms", 0),
-            "sector1_ms": lap_data.get("sector1_time_ms", 0),
-            "sector2_ms": lap_data.get("sector2_time_ms", 0),
-            "valid": not any(f.get("lap", {}).get("current_lap_invalid", False) for f in frames),
-            "frame_count": len(frames),
-        }
+        # Use the new lap summary method if available
+        lap_summary = pipeline.get_lap_summary(lap_num)
+        if lap_summary:
+            summary[lap_num] = lap_summary
+        else:
+            last_frame = frames[-1]
+            lap_data = last_frame.get("lap", {})
+            summary[lap_num] = {
+                "lap_number": lap_num,
+                "lap_time_ms": lap_data.get("last_lap_time_ms", 0),
+                "sector1_ms": lap_data.get("sector1_time_ms", 0),
+                "sector2_ms": lap_data.get("sector2_time_ms", 0),
+                "valid": not any(f.get("lap", {}).get("current_lap_invalid", False) for f in frames),
+                "frame_count": len(frames),
+            }
     return summary
 
 
@@ -105,7 +110,52 @@ async def get_lap_data(lap_number: int):
     data = pipeline.get_lap_data(lap_number)
     if not data:
         raise HTTPException(status_code=404, detail="Lap not found")
-    return {"lap_number": lap_number, "frames": data}
+    summary = pipeline.get_lap_summary(lap_number)
+    return {"lap_number": lap_number, "summary": summary, "frames": data}
+
+
+@app.get("/api/session/laps/{lap_number}/summary")
+async def get_lap_summary_endpoint(lap_number: int):
+    summary = pipeline.get_lap_summary(lap_number)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Lap not found")
+    return summary
+
+
+@app.get("/api/session/timed-laps")
+async def get_timed_laps():
+    """Get only timed laps (flying laps / on-track race laps), excluding out laps, in laps, and pit time."""
+    laps = pipeline.get_timed_laps()
+    summary = {}
+    for lap_num, frames in laps.items():
+        lap_summary = pipeline.get_lap_summary(lap_num)
+        if lap_summary:
+            summary[lap_num] = lap_summary
+    return summary
+
+
+@app.get("/api/telemetry/current/phase")
+async def get_current_phase():
+    """Get the current lap phase (garage, out_lap, flying_lap, in_lap, pitting, on_track, etc.)"""
+    frame = pipeline.get_current_frame()
+    if not frame:
+        raise HTTPException(status_code=404, detail="No telemetry available")
+    lap_info = frame.get("lap", {})
+    return {
+        "lap_phase": lap_info.get("lap_phase", "unknown"),
+        "driver_status": lap_info.get("driver_status", 0),
+        "pit_status": lap_info.get("pit_status", 0),
+        "is_in_pits": lap_info.get("is_in_pits", False),
+        "is_in_garage": lap_info.get("is_in_garage", False),
+        "is_on_flying_lap": lap_info.get("is_on_flying_lap", False),
+        "is_out_lap": lap_info.get("is_out_lap", False),
+        "is_in_lap": lap_info.get("is_in_lap", False),
+        "is_on_track": lap_info.get("is_on_track", False),
+        "current_lap_num": lap_info.get("current_lap_num", 0),
+        "current_lap_invalid": lap_info.get("current_lap_invalid", False),
+        "lap_distance": lap_info.get("lap_distance", 0.0),
+        "current_lap_time_ms": lap_info.get("current_lap_time_ms", 0),
+    }
 
 
 @app.get("/api/telemetry/current")

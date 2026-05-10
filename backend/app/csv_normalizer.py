@@ -1,6 +1,7 @@
 """
 Telemetry normalizer for imported CSV data.
 Computes derived metrics, track position, lap segmentation, and trajectory smoothing.
+Uses lapIndex and lapFlag to properly distinguish out laps from flying laps.
 """
 import math
 import logging
@@ -17,6 +18,7 @@ class NormalizedSample:
     lap_index: int
     lap_num: int
     valid_bin: bool
+    lap_flag: bool
     
     # Position
     world_position_x: float
@@ -68,11 +70,17 @@ class NormalizedSample:
 
 @dataclass
 class NormalizedLap:
-    lap_number: int
-    lap_index: int
+    lap_index: int          # Sequential lap index from CSV (0, 1, 2, ...)
+    lap_number: int         # Timed lap number (may differ from lap_index)
     lap_time_ms: Optional[int]
     valid: bool
     samples: List[NormalizedSample]
+    
+    # Lap classification
+    is_out_lap: bool = False
+    is_flying_lap: bool = False
+    is_in_lap: bool = False
+    is_pit_lap: bool = False
     
     # Statistics
     max_speed: float = 0.0
@@ -202,6 +210,7 @@ def normalize_samples(raw_rows: List[Dict[str, Any]]) -> List[NormalizedSample]:
             lap_index=row.get("lapIndex", 0) or 0,
             lap_num=row.get("lapNum", 0) or 0,
             valid_bin=row.get("validBin", True),
+            lap_flag=row.get("lapFlag", False),
             world_position_x=row.get("world_position_X", 0) or 0,
             world_position_y=row.get("world_position_Y", 0) or 0,
             world_position_z=row.get("world_position_Z", 0) or 0,
@@ -230,39 +239,96 @@ def normalize_samples(raw_rows: List[Dict[str, Any]]) -> List[NormalizedSample]:
     return samples
 
 
+def classify_lap(lap_samples: List[NormalizedSample]) -> Tuple[bool, bool, bool]:
+    """Classify a lap as out lap, flying lap, or in lap based on lapFlag and speed patterns.
+    
+    Returns: (is_out_lap, is_flying_lap, is_in_lap)
+    """
+    if not lap_samples:
+        return False, False, False
+    
+    # Check lapFlag - if any sample has lapFlag=True, it's an out lap
+    has_lap_flag = any(s.lap_flag for s in lap_samples)
+    if has_lap_flag:
+        return True, False, False
+    
+    # Analyze speed patterns for laps without explicit flags
+    speeds = [s.speed_kmh for s in lap_samples if s.speed_kmh is not None]
+    if not speeds:
+        return False, False, False
+    
+    avg_speed = sum(speeds) / len(speeds)
+    max_speed = max(speeds)
+    
+    # Very low average speed suggests pit/garage (not a flying lap)
+    if avg_speed < 30:
+        return False, False, False
+    
+    # High max speed with reasonable average = flying lap
+    if max_speed > 100 and avg_speed > 60:
+        return False, True, False
+    
+    # Moderate speed could be in lap or out lap
+    if avg_speed < 60:
+        # Check if speed builds up (out lap) or drops off (in lap)
+        first_third = speeds[:len(speeds)//3]
+        last_third = speeds[-len(speeds)//3:]
+        if first_third and last_third:
+            first_avg = sum(first_third) / len(first_third)
+            last_avg = sum(last_third) / len(last_third)
+            if first_avg < last_avg * 0.7:
+                return True, False, False  # Speed builds up = out lap
+            elif last_avg < first_avg * 0.7:
+                return False, False, True   # Speed drops = in lap
+    
+    # Default: assume flying lap if speed is reasonable
+    return False, True, False
+
+
 def segment_laps(samples: List[NormalizedSample]) -> List[NormalizedLap]:
-    """Segment samples into laps based on lapNum."""
+    """Segment samples into laps based on lapIndex (not lapNum).
+    
+    lapIndex is the sequential lap counter and is more reliable than lapNum
+    which may repeat values (e.g., both out lap and first flying lap can have lapNum=0).
+    """
     lap_groups = defaultdict(list)
     
     for sample in samples:
-        lap_groups[sample.lap_num].append(sample)
+        lap_groups[sample.lap_index].append(sample)
     
     laps = []
-    for lap_num in sorted(lap_groups.keys()):
-        lap_samples = lap_groups[lap_num]
+    for lap_index in sorted(lap_groups.keys()):
+        lap_samples = lap_groups[lap_index]
         
         # Sort by bin_index to ensure order
         lap_samples.sort(key=lambda s: s.bin_index)
+        
+        # Classify the lap
+        is_out, is_flying, is_in = classify_lap(lap_samples)
         
         # Determine lap validity
         valid = all(s.valid_bin for s in lap_samples) and len(lap_samples) > 0
         
         # Get lap time from last sample or compute from lap_time field
+        # Only consider lap time if lap has enough samples to be complete
         lap_time_ms = None
-        if lap_samples:
+        if lap_samples and len(lap_samples) > 100:
             last_time = lap_samples[-1].lap_time
-            if last_time is not None:
+            if last_time is not None and last_time > 0:
                 lap_time_ms = int(last_time * 1000)
         
         # Compute statistics
         speeds = [s.speed_kmh for s in lap_samples if s.speed_kmh is not None]
         
         lap = NormalizedLap(
-            lap_number=lap_num,
-            lap_index=lap_samples[0].lap_index if lap_samples else 0,
+            lap_index=lap_index,
+            lap_number=lap_samples[0].lap_num if lap_samples else lap_index,
             lap_time_ms=lap_time_ms,
             valid=valid,
             samples=lap_samples,
+            is_out_lap=is_out,
+            is_flying_lap=is_flying,
+            is_in_lap=is_in,
             max_speed=max(speeds) if speeds else 0.0,
             avg_speed=sum(speeds) / len(speeds) if speeds else 0.0,
             min_speed=min(speeds) if speeds else 0.0,
@@ -285,16 +351,23 @@ def normalize_telemetry_data(raw_rows: List[Dict[str, Any]], track_length: float
     # Step 1: Normalize raw samples
     samples = normalize_samples(raw_rows)
     
-    # Step 2: Segment into laps
+    # Step 2: Segment into laps using lapIndex
     laps = segment_laps(samples)
     
-    # Step 3: Find best lap for delta calculation
+    # Step 3: Find best flying lap for delta calculation
     best_lap = None
     best_time = float('inf')
     for lap in laps:
-        if lap.valid and lap.lap_time_ms and lap.lap_time_ms < best_time:
+        if lap.is_flying_lap and lap.valid and lap.lap_time_ms and lap.lap_time_ms < best_time:
             best_time = lap.lap_time_ms
             best_lap = lap
+    
+    # If no flying lap found, fall back to any valid lap
+    if best_lap is None:
+        for lap in laps:
+            if lap.valid and lap.lap_time_ms and lap.lap_time_ms < best_time:
+                best_time = lap.lap_time_ms
+                best_lap = lap
     
     # Step 4: Compute per-lap metrics
     for lap in laps:
@@ -315,14 +388,22 @@ def normalize_telemetry_data(raw_rows: List[Dict[str, Any]], track_length: float
     track_ids = set(s.raw.get("trackId") for s in samples if s.raw.get("trackId"))
     track_lengths = set(s.raw.get("trackLength") for s in samples if s.raw.get("trackLength"))
     
+    flying_laps = [l for l in laps if l.is_flying_lap]
+    out_laps = [l for l in laps if l.is_out_lap]
+    in_laps = [l for l in laps if l.is_in_lap]
+    
     metadata = {
         "car_id": list(car_ids)[0] if car_ids else "unknown",
         "track_id": list(track_ids)[0] if track_ids else "unknown",
         "track_length": list(track_lengths)[0] if track_lengths else track_length,
         "total_samples": len(samples),
         "lap_count": len(laps),
+        "flying_lap_count": len(flying_laps),
+        "out_lap_count": len(out_laps),
+        "in_lap_count": len(in_laps),
         "best_lap_time_ms": best_time if best_time != float('inf') else None,
         "best_lap_number": best_lap.lap_number if best_lap else None,
+        "best_lap_index": best_lap.lap_index if best_lap else None,
     }
     
     return laps, metadata

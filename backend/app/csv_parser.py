@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Expected CSV columns
 REQUIRED_COLUMNS = {
-    "carId", "trackId", "trackLength", "lapIndex", "lapNum", 
+    "carId", "trackId", "trackLength", "lapIndex", "lapNum",
     "binIndex", "world_position_X", "world_position_Y", "world_position_Z",
     "velocity_X", "velocity_Y", "velocity_Z",
     "throttle", "brake", "steering", "gear", "rpm"
@@ -115,46 +115,62 @@ def validate_csv_preview(file_content: str, max_rows: int = 10) -> CSVValidation
         )
 
 
+# Pre-built type mapping for fast row parsing
+_NUMERIC_FIELDS = {
+    "trackLength": float, "lapIndex": int, "lapNum": int,
+    "binIndex": int, "world_position_X": float, "world_position_Y": float,
+    "world_position_Z": float, "world_right_X": float, "world_right_Y": float,
+    "world_right_Z": float, "velocity_X": float, "velocity_Y": float,
+    "velocity_Z": float, "gforce_Y": float, "race_position": int,
+    "throttle": float, "brake": float, "steering": float,
+    "gear": int, "rpm": int, "lap_time": float,
+}
+
+
 def _parse_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[str, Any]]:
     """Parse a single CSV row into typed values."""
     try:
-        result = {}
+        result: Dict[str, Any] = {}
         
         # String fields
-        for col in ["carId", "trackId"]:
-            if col in row:
-                result[col] = row[col].strip()
+        val = row.get("carId")
+        if val:
+            result["carId"] = val.strip()
+        val = row.get("trackId")
+        if val:
+            result["trackId"] = val.strip()
         
-        # Numeric fields
-        numeric_fields = {
-            "trackLength": float, "lapIndex": int, "lapNum": int,
-            "binIndex": int, "world_position_X": float, "world_position_Y": float,
-            "world_position_Z": float, "world_right_X": float, "world_right_Y": float,
-            "world_right_Z": float, "velocity_X": float, "velocity_Y": float,
-            "velocity_Z": float, "gforce_Y": float, "race_position": int,
-            "throttle": float, "brake": float, "steering": float,
-            "gear": int, "rpm": int, "lap_time": float,
-        }
-        
-        for field, field_type in numeric_fields.items():
-            if field in row and row[field].strip():
-                try:
-                    result[field] = field_type(row[field])
-                except (ValueError, TypeError):
-                    result[field] = None
-            else:
-                result[field] = None
+        # Numeric fields — local variable lookup is faster than attribute access
+        nf = _NUMERIC_FIELDS
+        row_get = row.get
+        for field, field_type in nf.items():
+            raw = row_get(field)
+            if raw is not None:
+                raw = raw.strip()
+                if raw:
+                    try:
+                        val = field_type(raw)
+                        if val == -1 or val == -1.0:
+                            result[field] = None
+                        else:
+                            result[field] = val
+                    except (ValueError, TypeError):
+                        result[field] = None
+                    continue
+            result[field] = None
         
         # Boolean fields
-        if "validBin" in row:
-            val = row["validBin"].strip().lower()
-            result["validBin"] = val in ("1", "true", "yes", "1.0") if val else True
+        raw = row_get("validBin")
+        if raw is not None:
+            raw = raw.strip().lower()
+            result["validBin"] = raw in ("1", "true", "yes", "1.0") if raw else True
         else:
             result["validBin"] = True
             
-        if "lapFlag" in row:
-            val = row["lapFlag"].strip().lower()
-            result["lapFlag"] = val in ("1", "true", "yes", "1.0") if val else False
+        raw = row_get("lapFlag")
+        if raw is not None:
+            raw = raw.strip().lower()
+            result["lapFlag"] = raw in ("1", "true", "yes", "1.0") if raw else False
         else:
             result["lapFlag"] = False
         
@@ -164,8 +180,21 @@ def _parse_row(row: Dict[str, str], headers: List[str]) -> Optional[Dict[str, An
         return None
 
 
+def is_row_valid(row: Dict[str, Any]) -> bool:
+    """Check if a row has actual telemetry data (not all -1/garage values)."""
+    # Key fields that must not be None/-1 for the row to be valid
+    key_fields = ["world_position_X", "velocity_X", "throttle", "gear", "rpm"]
+    for field in key_fields:
+        if row.get(field) is not None and row[field] != -1:
+            return True
+    return False
+
+
 def stream_csv_rows(file_content: str, chunk_size: int = 1000) -> Iterator[List[Dict[str, Any]]]:
-    """Stream CSV rows in chunks to avoid memory issues."""
+    """Stream CSV rows in chunks to avoid memory issues.
+    
+    Filters out rows with no actual telemetry data (garage/idle rows with all -1s).
+    """
     lines = file_content.splitlines()
     if not lines:
         return
@@ -177,7 +206,7 @@ def stream_csv_rows(file_content: str, chunk_size: int = 1000) -> Iterator[List[
     chunk = []
     for row in reader:
         parsed = _parse_row(row, headers)
-        if parsed is not None:
+        if parsed is not None and is_row_valid(parsed):
             chunk.append(parsed)
         
         if len(chunk) >= chunk_size:
@@ -192,18 +221,20 @@ def parse_csv_file(file_content: str) -> Tuple[List[Dict[str, Any]], CSVParseSta
     """Parse entire CSV file into memory. Use stream_csv_rows for large files."""
     stats = CSVParseStats()
     all_rows = []
+    total_raw_rows = 0
     
     for chunk in stream_csv_rows(file_content):
         all_rows.extend(chunk)
         stats.valid_rows += len(chunk)
+        total_raw_rows += len(chunk)  # stream_csv_rows yields filtered chunks
     
-    stats.total_rows = len(all_rows)
+    stats.total_rows = total_raw_rows
     
-    # Detect laps
-    lap_nums = set()
+    # Detect laps using lapIndex (more reliable than lapNum)
+    lap_indices = set()
     for row in all_rows:
-        if row.get("lapNum") is not None:
-            lap_nums.add(row["lapNum"])
-    stats.laps_detected = len(lap_nums)
+        if row.get("lapIndex") is not None:
+            lap_indices.add(row["lapIndex"])
+    stats.laps_detected = len(lap_indices)
     
     return all_rows, stats

@@ -1,148 +1,243 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
-import { Table, Download, Play, Trash2, Calendar, Trophy, Flag } from 'lucide-react';
+import { Table, Download, Trash2, Calendar, Flag, Upload, Search, Filter, FileSpreadsheet, Eye, Play } from 'lucide-react';
 import { formatTime } from '@/utils/formatters';
+import ImportModal from '@/components/ImportModal';
+import { useNavigate } from 'react-router-dom';
 
-interface SessionRecord {
-  session_id: string;
-  name: string;
-  track: string;
-  session_type: string;
-  date: string;
-  laps: number;
-  best_lap_ms: number;
-  status: 'active' | 'completed' | 'saved';
-}
-
-function formatDate(ts: number): string {
-  try {
-    return new Date(ts * 1000).toISOString().split('T')[0];
-  } catch {
-    return new Date().toISOString().split('T')[0];
-  }
-}
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export default function SessionTable() {
-  const { session } = useTelemetryStore();
+  const { session, importedSessions, setImportedSessions, setImportModalOpen, removeImportedSession, setSelectedImportedSession } = useTelemetryStore();
   const [filter, setFilter] = useState('');
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [trackFilter, setTrackFilter] = useState('');
+  const [sessions, setSessions] = useState<any[]>([]);
+  const navigate = useNavigate();
 
-
-  const fetchSessions = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sessions');
-      if (!res.ok) return;
-      const data = await res.json();
-      const records: SessionRecord[] = (data.sessions || []).map((s: any) => ({
-        session_id: s.session_id,
-        name: `${s.session_type} - ${s.track}`,
-        track: s.track,
-        session_type: s.session_type,
-        date: formatDate(s.created_at),
-        laps: s.lap_count || 0,
-        best_lap_ms: s.best_lap_time || 0,
-        status: s.status || (s.is_active ? 'active' : 'completed'),
-      }));
-      setSessions(records);
-    } catch {
-      // ignore
-    }
-  }, []);
-
+  // Fetch imported sessions
   useEffect(() => {
-    fetchSessions();
-    const interval = setInterval(fetchSessions, 5000);
+    const fetchImported = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch(`${API_URL}/api/import/sessions`);
+        if (res.ok) {
+          const data = await res.json();
+          setImportedSessions(data.sessions || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch imported sessions:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchImported();
+  }, [setImportedSessions]);
+
+  // Fetch local pipeline sessions
+  useEffect(() => {
+    const fetchLocal = async () => {
+      try {
+        const res = await fetch('/api/sessions');
+        if (!res.ok) return;
+        const data = await res.json();
+        setSessions(data.sessions || []);
+      } catch (err) {
+        console.error('Failed to fetch local sessions:', err);
+      }
+    };
+    fetchLocal();
+    const interval = setInterval(fetchLocal, 5000);
     return () => clearInterval(interval);
-  }, [fetchSessions]);
+  }, []);
 
   const allSessions = useMemo(() => {
     const current = session ? [{
-      session_id: session.session_id,
+      id: session.session_id,
       name: `${session.session_type} - ${session.track}`,
       track: session.track,
       session_type: session.session_type,
       date: new Date().toISOString().split('T')[0],
-      laps: session.lap_count || 0,
+      laps: session.lap_count,
       best_lap_ms: session.best_lap_time || 0,
       status: 'active' as const,
+      source: 'live',
+      sample_count: 0,
     }] : [];
-    // Merge current live session on top if not already in fetched list
-    const existingIds = new Set(sessions.map(s => s.session_id));
-    const merged = [...current.filter(c => !existingIds.has(c.session_id)), ...sessions];
-    return merged;
-  }, [session, sessions]);
+
+    const local = sessions.map((s: any) => ({
+      id: s.session_id,
+      name: `${s.session_type} - ${s.track}`,
+      track: s.track,
+      session_type: s.session_type,
+      date: new Date((s.created_at || 0) * 1000).toISOString().split('T')[0],
+      laps: s.lap_count || 0,
+      best_lap_ms: s.best_lap_time || 0,
+      status: (s.status || (s.is_active ? 'active' : 'completed')) as 'active' | 'completed' | 'saved',
+      source: 'local' as const,
+      sample_count: 0,
+    }));
+
+    const imported = importedSessions.map(s => ({
+      id: s.id,
+      name: s.name,
+      track: s.track,
+      session_type: s.session_type,
+      date: s.created_at?.split('T')[0] || '',
+      laps: s.lap_count,
+      best_lap_ms: s.best_lap_time_ms || 0,
+      status: 'saved' as const,
+      source: s.source,
+      sample_count: s.sample_count,
+    }));
+
+    return [...current, ...local, ...imported];
+  }, [session, sessions, importedSessions]);
+
+  const tracks = useMemo(() => {
+    const trackSet = new Set(allSessions.map(s => s.track));
+    return Array.from(trackSet).sort();
+  }, [allSessions]);
 
   const filtered = useMemo(() => {
-    if (!filter) return allSessions;
-    const f = filter.toLowerCase();
-    return allSessions.filter(s =>
-      s.name.toLowerCase().includes(f) ||
-      s.track.toLowerCase().includes(f) ||
-      s.session_type.toLowerCase().includes(f)
-    );
-  }, [allSessions, filter]);
+    let result = allSessions;
 
-  const handleExport = async (sessionId: string) => {
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/export`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${sessionId}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      // ignore
+    if (filter) {
+      const f = filter.toLowerCase();
+      result = result.filter(s =>
+        s.name.toLowerCase().includes(f) ||
+        s.track.toLowerCase().includes(f) ||
+        s.session_type.toLowerCase().includes(f)
+      );
     }
-  };
 
-  const handlePlay = async (sessionId: string) => {
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/replay`, { method: 'POST' });
-      if (!res.ok) return;
-    } catch {
-      // ignore
+    if (trackFilter) {
+      result = result.filter(s => s.track === trackFilter);
     }
-  };
 
-  const handleDelete = async (sessionId: string) => {
+    return result;
+  }, [allSessions, filter, trackFilter]);
+
+  const handleDelete = useCallback(async (id: string, source: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Delete this session?')) return;
+
     try {
-      const res = await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
-      if (!res.ok) return;
-      setSessions(prev => prev.filter(s => s.session_id !== sessionId));
-      if (selectedSession === sessionId) setSelectedSession(null);
-    } catch {
-      // ignore
+      if (source === 'local') {
+        const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          setSessions(prev => prev.filter(s => s.session_id !== id));
+          if (selectedSession === id) setSelectedSession(null);
+        }
+      } else if (source === 'csv') {
+        const res = await fetch(`${API_URL}/api/import/sessions/${id}`, {
+          method: 'DELETE',
+        });
+        if (res.ok) {
+          removeImportedSession(id);
+          if (selectedSession === id) setSelectedSession(null);
+        }
+      }
+    } catch (err) {
+      console.error('Delete failed:', err);
     }
-  };
+  }, [removeImportedSession, selectedSession]);
+
+  const handleExport = useCallback(async (id: string, source: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      if (source === 'live' || source === 'local') {
+        const res = await fetch(`/api/sessions/${id}/export`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${id}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const res = await fetch(`${API_URL}/api/import/sessions/${id}/export?format=csv`);
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `session_${id}.csv`;
+          a.click();
+          window.URL.revokeObjectURL(url);
+        }
+      }
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  }, []);
+
+  const handleReplay = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/sessions/${id}/replay`, { method: 'POST' });
+      if (!res.ok) return;
+    } catch (err) {
+      console.error('Replay failed:', err);
+    }
+  }, []);
+
+  const handleView = useCallback((id: string) => {
+    const importedSession = importedSessions.find(s => s.id === id);
+    if (importedSession) {
+      setSelectedImportedSession(importedSession);
+      navigate(`/session/${id}`);
+    }
+  }, [importedSessions, setSelectedImportedSession, navigate]);
 
   return (
     <div className="h-full flex flex-col p-3 gap-3">
+      <ImportModal />
+
       {/* Header */}
       <div className="flex items-center justify-between telemetry-panel p-2 shrink-0">
         <div className="flex items-center gap-2">
           <Table className="w-4 h-4 text-motorsport-orange" />
-          <span className="text-sm font-semibold">SESSIONS</span>
+          <span className="text-sm font-semibold">SESSION LIBRARY</span>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Filter sessions..."
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-            className="bg-motorsport-charcoal border border-motorsport-border rounded-sm px-3 py-1.5 text-xs text-motorsport-text placeholder-motorsport-dim focus:outline-none focus:border-motorsport-orange w-48"
-          />
+          {/* Track Filter */}
+          <div className="relative">
+            <Filter className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-motorsport-muted" />
+            <select
+              value={trackFilter}
+              onChange={(e) => setTrackFilter(e.target.value)}
+              className="bg-motorsport-charcoal border border-motorsport-border rounded-sm pl-7 pr-3 py-1.5 text-xs text-motorsport-text focus:outline-none focus:border-motorsport-orange appearance-none cursor-pointer"
+            >
+              <option value="">All Tracks</option>
+              {tracks.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Search */}
+          <div className="relative">
+            <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-motorsport-muted" />
+            <input
+              type="text"
+              placeholder="Filter sessions..."
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              className="bg-motorsport-charcoal border border-motorsport-border rounded-sm pl-7 pr-3 py-1.5 text-xs text-motorsport-text placeholder-motorsport-dim focus:outline-none focus:border-motorsport-orange w-48"
+            />
+          </div>
+
+          {/* Import Button */}
           <button
-            onClick={() => handleExport(selectedSession || '')}
-            disabled={!selectedSession}
-            className="flex items-center gap-1 px-3 py-1.5 bg-motorsport-surface rounded-sm text-xs hover:bg-motorsport-surface/80 transition-colors disabled:opacity-40"
+            onClick={() => setImportModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-orange text-motorsport-black rounded-sm text-xs font-semibold hover:bg-motorsport-orange/90 transition-colors"
           >
-            <Download className="w-3 h-3" />
-            Export
+            <Upload className="w-3 h-3" />
+            Import
           </button>
         </div>
       </div>
@@ -159,40 +254,44 @@ export default function SessionTable() {
                 <th className="text-left p-3">Type</th>
                 <th className="text-left p-3">Date</th>
                 <th className="text-right p-3">Laps</th>
+                <th className="text-right p-3">Samples</th>
                 <th className="text-right p-3">Best Lap</th>
                 <th className="text-center p-3">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
+              {loading && (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-sm text-motorsport-muted">
-                    No sessions available. Start receiving telemetry to see sessions here.
+                  <td colSpan={9} className="p-8 text-center text-sm text-motorsport-muted">
+                    Loading sessions...
+                  </td>
+                </tr>
+              )}
+              {!loading && filtered.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="p-8 text-center text-sm text-motorsport-muted">
+                    No sessions found. Import a CSV or start receiving telemetry to get started.
                   </td>
                 </tr>
               )}
               {filtered.map(s => (
                 <tr
-                  key={s.session_id}
+                  key={s.id}
                   className={`border-b border-motorsport-border/50 hover:bg-motorsport-surface/30 transition-colors cursor-pointer ${
-                    selectedSession === s.session_id ? 'bg-motorsport-orange/5' : ''
+                    selectedSession === s.id ? 'bg-motorsport-orange/5' : ''
                   }`}
-                  onClick={() => setSelectedSession(s.session_id)}
+                  onClick={() => setSelectedSession(s.id)}
                 >
                   <td className="p-3">
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-sm border ${
                       s.status === 'active'
                         ? 'bg-motorsport-green/10 text-motorsport-green border-motorsport-green/30'
-                        : s.status === 'completed'
-                        ? 'bg-motorsport-cyan/10 text-motorsport-cyan border-motorsport-cyan/30'
                         : 'bg-motorsport-muted/10 text-motorsport-muted border-motorsport-muted/30'
                     }`}>
                       {s.status === 'active' ? (
                         <><Flag className="w-3 h-3" /> LIVE</>
-                      ) : s.status === 'completed' ? (
-                        <><Trophy className="w-3 h-3" /> DONE</>
                       ) : (
-                        'SAVED'
+                        <><FileSpreadsheet className="w-3 h-3" /> {s.source === 'csv' ? 'CSV' : 'SAVED'}</>
                       )}
                     </span>
                   </td>
@@ -210,32 +309,51 @@ export default function SessionTable() {
                     </div>
                   </td>
                   <td className="p-3 text-right font-telemetry text-sm">{s.laps}</td>
+                  <td className="p-3 text-right font-telemetry text-sm text-motorsport-muted">
+                    {s.sample_count > 0 ? s.sample_count.toLocaleString() : '--'}
+                  </td>
                   <td className="p-3 text-right font-telemetry text-sm text-motorsport-cyan">
                     {s.best_lap_ms > 0 ? formatTime(s.best_lap_ms) : '--:--'}
                   </td>
                   <td className="p-3">
                     <div className="flex items-center justify-center gap-1">
+                      {s.source === 'csv' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleView(s.id);
+                          }}
+                          className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
+                          title="View Session"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-motorsport-cyan" />
+                        </button>
+                      )}
+                      {(s.source === 'live' || s.source === 'local') && (
+                        <button
+                          onClick={(e) => handleReplay(s.id, e)}
+                          className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
+                          title="Replay"
+                        >
+                          <Play className="w-3.5 h-3.5 text-motorsport-green" />
+                        </button>
+                      )}
                       <button
-                        onClick={(e) => { e.stopPropagation(); handlePlay(s.session_id); }}
-                        className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
-                        title="Replay"
-                      >
-                        <Play className="w-3.5 h-3.5 text-motorsport-green" />
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleExport(s.session_id); }}
+                        onClick={(e) => handleExport(s.id, s.source, e)}
                         className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
                         title="Export"
                       >
                         <Download className="w-3.5 h-3.5 text-motorsport-muted" />
                       </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDelete(s.session_id); }}
-                        className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-motorsport-red" />
-                      </button>
+                      {s.source !== 'live' && (
+                        <button
+                          onClick={(e) => handleDelete(s.id, s.source, e)}
+                          className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-motorsport-red" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -256,7 +374,9 @@ export default function SessionTable() {
           </span>
           <span className="text-motorsport-muted">
             Best: <span className="text-motorsport-cyan font-telemetry">
-              {formatTime(Math.min(...filtered.filter(s => s.best_lap_ms > 0).map(s => s.best_lap_ms)) || 0)}
+              {filtered.filter(s => s.best_lap_ms > 0).length > 0
+                ? formatTime(Math.min(...filtered.filter(s => s.best_lap_ms > 0).map(s => s.best_lap_ms)))
+                : '--:--'}
             </span>
           </span>
         </div>

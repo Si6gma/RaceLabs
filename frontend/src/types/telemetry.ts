@@ -130,3 +130,69 @@ export interface LapSummary {
 }
 
 export type TelemetryChannel = 'live' | 'replay' | 'session';
+
+// Imported Session Types
+
+export interface ImportedSession {
+  id: string;
+  name: string;
+  track: string;
+  track_id?: string;
+  track_length?: number;
+  car_id?: string;
+  session_type: string;
+  source: string;
+  file_name?: string;
+  created_at: string;
+  sample_count: number;
+  lap_count: number;
+  best_lap_time_ms?: number;
+  status: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ImportedLap {
+  id: string;
+  lap_number: number;
+  lap_index: number;
+  lap_time_ms?: number;
+  valid: boolean;
+  valid_bin_count: number;
+  total_bin_count: number;
+  max_speed: number;
+  avg_speed: number;
+  min_speed: number;
+}
+
+export interface TelemetrySample {
+  bin_index: number;
+  normalized_track_position: number;
+  world_position_x: number;
+  world_position_y: number;
+  world_position_z: number;
+  velocity_x: number;
+  velocity_y: number;
+  velocity_z: number;
+  speed: number;
+  speed_kmh: number;
+  throttle: number;
+  brake: number;
+  steering: number;
+  gear: number;
+  rpm: number;
+  gforce_lat: number;
+  race_position: number;
+  lap_time?: number;
+  delta_time: number;
+  sector: number;
+  cumulative_distance: number;
+  trajectory_curvature: number;
+}
+
+export interface ImportProgress {
+  status: 'validating' | 'parsing' | 'normalizing' | 'storing' | 'complete' | 'error';
+  progress: number;
+  message: string;
+  session_id?: string;
+  session?: ImportedSession;
+}

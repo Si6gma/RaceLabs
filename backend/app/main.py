@@ -7,14 +7,17 @@ import json
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, PlainTextResponse
 
 from app.config import get_settings
-from app.database import init_db
+from app.database import init_db, get_db
 from app.websocket import manager
 from app.telemetry import pipeline
 from app.udp_receiver import receiver
+from app.csv_import_service import CSVImportService
+from sqlalchemy.ext.asyncio import AsyncSession
 
 settings = get_settings()
 logging.basicConfig(level=logging.INFO)
@@ -62,10 +65,15 @@ app.add_middleware(
 )
 
 
+# Health
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": settings.APP_NAME}
 
+
+# ============================================================================
+# LIVE TELEMETRY ENDPOINTS
+# ============================================================================
 
 @app.get("/api/session")
 async def get_session():
@@ -129,6 +137,10 @@ async def stop_replay():
     return {"status": "stopped"}
 
 
+# ============================================================================
+# SESSION ENDPOINTS
+# ============================================================================
+
 @app.get("/api/sessions")
 async def get_sessions():
     return {"sessions": pipeline.get_all_sessions()}
@@ -137,6 +149,87 @@ async def get_sessions():
 @app.get("/api/sessions/{session_id}/export")
 async def export_session(session_id: str):
     data = pipeline.get_session_data(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+
+# ============================================================================
+# CSV IMPORT / EXPORT ENDPOINTS
+# ============================================================================
+
+@app.post("/api/import/validate")
+async def validate_csv_upload(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Validate a CSV file before import."""
+    try:
+        content = await file.read()
+        text = content.decode("utf-8")
+        service = CSVImportService(db)
+        result = await service.validate_upload(text)
+        return result
+    except Exception as e:
+        logger.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/import/csv")
+async def import_csv(
+    file: UploadFile = File(...),
+    session_name: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Import a CSV telemetry file. Returns the imported session."""
+    try:
+        content = await file.read()
+        text = content.decode("utf-8")
+        service = CSVImportService(db)
+        
+        # Collect final result from generator
+        final_result = None
+        async for update in service.import_csv(text, file.filename, session_name):
+            final_result = update
+        
+        if final_result and final_result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=final_result.get("message", "Import failed"))
+        
+        return final_result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Import error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/import/sessions")
+async def get_imported_sessions(db: AsyncSession = Depends(get_db)):
+    """Get all imported sessions."""
+    service = CSVImportService(db)
+    sessions = await service.get_sessions()
+    return {"sessions": sessions}
+
+
+@app.get("/api/import/sessions/{session_id}")
+async def get_imported_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Get a single imported session with laps."""
+    service = CSVImportService(db)
+    session = await service.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.get("/api/import/sessions/{session_id}/telemetry")
+async def get_session_telemetry(
+    session_id: str,
+    lap_numbers: Optional[List[int]] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get telemetry samples for a session."""
+    service = CSVImportService(db)
+    data = await service.get_session_telemetry(session_id, lap_numbers)
     if not data:
         raise HTTPException(status_code=404, detail="Session not found")
     return data
@@ -174,6 +267,51 @@ async def replay_session(session_id: str, lap_number: Optional[int] = None):
     return {"status": "started", "session_id": session_id, "lap_number": target_lap}
 
 
+@app.get("/api/import/laps/{lap_id}/telemetry")
+async def get_lap_telemetry(lap_id: str, db: AsyncSession = Depends(get_db)):
+    """Get telemetry samples for a specific lap."""
+    service = CSVImportService(db)
+    samples = await service.get_lap_telemetry(lap_id)
+    return {"lap_id": lap_id, "samples": samples, "count": len(samples)}
+
+
+@app.delete("/api/import/sessions/{session_id}")
+async def delete_imported_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Delete an imported session."""
+    service = CSVImportService(db)
+    success = await service.delete_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "deleted", "session_id": session_id}
+
+
+@app.get("/api/import/sessions/{session_id}/export")
+async def export_session_csv(
+    session_id: str,
+    lap_numbers: Optional[List[int]] = Query(None),
+    format: str = "csv",
+    db: AsyncSession = Depends(get_db),
+):
+    """Export session telemetry to CSV."""
+    service = CSVImportService(db)
+    
+    if format == "csv":
+        csv_data = await service.export_session_csv(session_id, lap_numbers)
+        if not csv_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        return PlainTextResponse(
+            content=csv_data,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=session_{session_id}.csv"}
+        )
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+
+
+# ============================================================================
+# WEBSOCKET
+# ============================================================================
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TelemetryFrame, SessionSummary, LapSummary } from '@/types/telemetry';
+import type { TelemetryFrame, SessionSummary, LapSummary, ImportedSession, ImportedLap } from '@/types/telemetry';
 
 interface TelemetryState {
   // Live data
@@ -11,6 +11,11 @@ interface TelemetryState {
   session: SessionSummary | null;
   laps: Record<number, LapSummary>;
   
+  // Imported Sessions
+  importedSessions: ImportedSession[];
+  selectedImportedSession: ImportedSession | null;
+  importedLaps: ImportedLap[];
+  
   // Connection
   connected: boolean;
   connecting: boolean;
@@ -19,6 +24,7 @@ interface TelemetryState {
   // UI State
   selectedLaps: number[];
   compareLaps: number[];
+  importModalOpen: boolean;
   
   // Actions
   setCurrentFrame: (frame: TelemetryFrame) => void;
@@ -31,6 +37,16 @@ interface TelemetryState {
   deselectLap: (lap: number) => void;
   toggleCompareLap: (lap: number) => void;
   clearHistory: () => void;
+  
+  // Imported session actions
+  setImportedSessions: (sessions: ImportedSession[]) => void;
+  addImportedSession: (session: ImportedSession) => void;
+  setSelectedImportedSession: (session: ImportedSession | null) => void;
+  setImportedLaps: (laps: ImportedLap[]) => void;
+  removeImportedSession: (id: string) => void;
+  
+  // UI actions
+  setImportModalOpen: (open: boolean) => void;
 }
 
 export const useTelemetryStore = create<TelemetryState>((set, get) => ({
@@ -39,11 +55,15 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   maxHistory: 1000,
   session: null,
   laps: {},
+  importedSessions: [],
+  selectedImportedSession: null,
+  importedLaps: [],
   connected: false,
   connecting: false,
   replayMode: false,
   selectedLaps: [],
   compareLaps: [],
+  importModalOpen: false,
   
   setCurrentFrame: (frame) => {
     const state = get();
@@ -83,4 +103,18 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   },
   
   clearHistory: () => set({ frameHistory: [], currentFrame: null }),
+  
+  setImportedSessions: (sessions) => set({ importedSessions: sessions }),
+  addImportedSession: (session) => {
+    const state = get();
+    set({ importedSessions: [session, ...state.importedSessions] });
+  },
+  setSelectedImportedSession: (session) => set({ selectedImportedSession: session }),
+  setImportedLaps: (laps) => set({ importedLaps: laps }),
+  removeImportedSession: (id) => {
+    const state = get();
+    set({ importedSessions: state.importedSessions.filter(s => s.id !== id) });
+  },
+  
+  setImportModalOpen: (open) => set({ importModalOpen: open }),
 }));

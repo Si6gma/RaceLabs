@@ -20,6 +20,7 @@ export default {
           red: '#ff1744',
           yellow: '#ffea00',
           purple: '#d500f9',
+          blue: '#3b82f6',
           text: '#e0e0e0',
           muted: '#888888',
           dim: '#555555',

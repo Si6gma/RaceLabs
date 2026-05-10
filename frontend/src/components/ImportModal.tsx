@@ -3,7 +3,7 @@ import { useTelemetryStore } from '@/stores/telemetryStore';
 import { Upload, X, FileSpreadsheet, CheckCircle, AlertTriangle, Loader2, FileUp } from 'lucide-react';
 import type { ImportProgress } from '@/types/telemetry';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 export default function ImportModal() {
   const { importModalOpen, setImportModalOpen, addImportedSession } = useTelemetryStore();

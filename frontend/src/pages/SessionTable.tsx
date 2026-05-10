@@ -5,7 +5,7 @@ import { formatTime } from '@/utils/formatters';
 import ImportModal from '@/components/ImportModal';
 import { useNavigate } from 'react-router-dom';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 export default function SessionTable() {
   const { session, importedSessions, setImportedSessions, setImportModalOpen, removeImportedSession, setSelectedImportedSession } = useTelemetryStore();

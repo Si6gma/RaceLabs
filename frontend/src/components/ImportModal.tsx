@@ -55,7 +55,7 @@ export default function ImportModal() {
         body: formData,
       });
       
-      if (!res.ok) throw new Error('Validation failed');
+      if (!res.ok) throw new Error(`Validation failed: ${res.status} ${res.statusText}`);
       
       const data = await res.json();
       setValidation(data);
@@ -112,8 +112,15 @@ export default function ImportModal() {
       });
       
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Import failed');
+        const text = await res.text();
+        let message = `Import failed: ${res.status} ${res.statusText}`;
+        try {
+          const err = JSON.parse(text);
+          if (err.detail) message = err.detail;
+        } catch {
+          // ignore JSON parse error
+        }
+        throw new Error(message);
       }
       
       const data = await res.json();

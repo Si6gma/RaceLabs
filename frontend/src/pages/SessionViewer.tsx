@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import {
-  ArrowLeft, Play, Pause, SkipBack, SkipForward,
-  Gauge, MapPin, Layers, Download, Activity
+  ArrowLeft, Gauge, MapPin, Layers, Download, Activity,
+  BarChart3, Map as MapIcon
 } from 'lucide-react';
 import type { TelemetrySample, ImportedLap, ImportedSession } from '@/types/telemetry';
 
@@ -24,31 +24,41 @@ const LAP_COLORS = [
   '#06b6d4', // cyan
 ];
 
+// Fixed telemetry colors
+const COLOR_SPEED = '#3b82f6';
+const COLOR_THROTTLE = '#22c55e';
+const COLOR_BRAKE = '#ef4444';
+
 export default function SessionViewer() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const { setSelectedImportedSession } = useTelemetryStore();
-  
+
   const [session, setSession] = useState<ImportedSession | null>(null);
   const [laps, setLaps] = useState<LapTelemetry[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLaps, setSelectedLaps] = useState<Set<number>>(new Set());
-  const [replayPlaying, setReplayPlaying] = useState(false);
-  const [replaySpeed, setReplaySpeed] = useState(1);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [currentLapIndex, setCurrentLapIndex] = useState(0);
 
+  const [viewMode, setViewMode] = useState<'graph' | 'track'>('graph');
   const [showThrottle, setShowThrottle] = useState(true);
   const [showBrake, setShowBrake] = useState(true);
   const [showSpeed, setShowSpeed] = useState(true);
-  const replayRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Zoom state: sample index range [start, end]
+  const [zoomRange, setZoomRange] = useState<[number, number]>([0, 1]);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartZoom = useRef<[number, number]>([0, 1]);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const trackCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Load session data
   useEffect(() => {
     if (!sessionId) return;
-    
+
     const load = async () => {
       try {
         setLoading(true);
@@ -57,7 +67,7 @@ export default function SessionViewer() {
         const data = await res.json();
         setSession(data);
         setSelectedImportedSession(data);
-        
+
         // Load telemetry for all laps
         const lapData: LapTelemetry[] = [];
         for (let i = 0; i < data.laps.length; i++) {
@@ -73,7 +83,7 @@ export default function SessionViewer() {
           }
         }
         setLaps(lapData);
-        
+
         // Auto-select first valid lap
         const firstValid = lapData.findIndex(l => l.lap.valid);
         if (firstValid >= 0) {
@@ -86,7 +96,7 @@ export default function SessionViewer() {
         setLoading(false);
       }
     };
-    
+
     load();
   }, [sessionId, setSelectedImportedSession]);
 
@@ -104,53 +114,40 @@ export default function SessionViewer() {
     return lap.samples[currentIndex];
   }, [selectedLapData, currentLapIndex, currentIndex]);
 
-  // Replay logic
+  // Reset zoom when selected laps change
   useEffect(() => {
-    if (replayPlaying) {
-      const interval = 50 / replaySpeed; // 20fps base
-      replayRef.current = setInterval(() => {
-        setCurrentIndex(prev => {
-          const lap = selectedLapData[currentLapIndex % selectedLapData.length];
-          if (!lap) return prev;
-          if (prev >= lap.samples.length - 1) {
-            setReplayPlaying(false);
-            return prev;
-          }
-          return prev + 1;
-        });
-      }, interval);
+    const lap = selectedLapData[0];
+    if (lap && lap.samples.length > 1) {
+      setZoomRange([0, lap.samples.length - 1]);
+      setCurrentIndex(0);
     }
-    
-    return () => {
-      if (replayRef.current) {
-        clearInterval(replayRef.current);
-        replayRef.current = null;
-      }
-    };
-  }, [replayPlaying, replaySpeed, selectedLapData, currentLapIndex]);
+  }, [selectedLapData.map(l => l.lap.id).join(',')]);
 
   // Draw telemetry graphs
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || selectedLapData.length === 0) return;
-    
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
+
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
-    
+
     const width = rect.width;
     const height = rect.height;
     const padding = { top: 20, right: 20, bottom: 30, left: 50 };
     const graphWidth = width - padding.left - padding.right;
     const graphHeight = height - padding.top - padding.bottom;
-    
+
     ctx.clearRect(0, 0, width, height);
-    
+
+    const [zStart, zEnd] = zoomRange;
+    const zoomSamples = Math.max(1, zEnd - zStart);
+
     // Draw grid
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 0.5;
@@ -161,77 +158,95 @@ export default function SessionViewer() {
       ctx.lineTo(width - padding.right, y);
       ctx.stroke();
     }
-    
+
     // Draw each selected lap
     selectedLapData.forEach((lapData) => {
       const samples = lapData.samples;
       if (samples.length < 2) return;
-      
-      const xScale = graphWidth / (samples.length - 1);
-      
+
+      const xScale = graphWidth / zoomSamples;
+
       // Speed
       if (showSpeed) {
-        ctx.strokeStyle = lapData.color;
+        ctx.strokeStyle = COLOR_SPEED;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        samples.forEach((s, i) => {
-          const x = padding.left + i * xScale;
+        for (let i = Math.floor(zStart); i <= Math.ceil(zEnd) && i < samples.length; i++) {
+          const s = samples[i];
+          const x = padding.left + (i - zStart) * xScale;
           const y = padding.top + graphHeight - (s.speed_kmh / 350) * graphHeight;
-          if (i === 0) ctx.moveTo(x, y);
+          if (i === Math.floor(zStart)) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
-        });
+        }
         ctx.stroke();
       }
-      
+
       // Throttle
       if (showThrottle) {
-        ctx.strokeStyle = lapData.color;
+        ctx.strokeStyle = COLOR_THROTTLE;
         ctx.globalAlpha = 0.3;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        samples.forEach((s, i) => {
-          const x = padding.left + i * xScale;
+        for (let i = Math.floor(zStart); i <= Math.ceil(zEnd) && i < samples.length; i++) {
+          const s = samples[i];
+          const x = padding.left + (i - zStart) * xScale;
           const y = padding.top + graphHeight - s.throttle * graphHeight * 0.3;
-          if (i === 0) ctx.moveTo(x, y);
+          if (i === Math.floor(zStart)) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
-        });
+        }
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
-      
+
       // Brake
       if (showBrake) {
-        ctx.strokeStyle = '#ef4444';
+        ctx.strokeStyle = COLOR_BRAKE;
         ctx.globalAlpha = 0.3;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        samples.forEach((s, i) => {
-          const x = padding.left + i * xScale;
+        for (let i = Math.floor(zStart); i <= Math.ceil(zEnd) && i < samples.length; i++) {
+          const s = samples[i];
+          const x = padding.left + (i - zStart) * xScale;
           const y = padding.top + graphHeight - s.brake * graphHeight * 0.3;
-          if (i === 0) ctx.moveTo(x, y);
+          if (i === Math.floor(zStart)) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
-        });
+        }
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
     });
-    
+
     // Draw cursor
     if (currentSample && selectedLapData.length > 0) {
-      const lap = selectedLapData[currentLapIndex % selectedLapData.length];
-      const xScale = graphWidth / (lap.samples.length - 1);
-      const x = padding.left + currentIndex * xScale;
-      
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(x, padding.top);
-      ctx.lineTo(x, height - padding.bottom);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (currentIndex >= zStart && currentIndex <= zEnd) {
+        const xScale = graphWidth / zoomSamples;
+        const x = padding.left + (currentIndex - zStart) * xScale;
+
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(x, padding.top);
+        ctx.lineTo(x, height - padding.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
-    
+
+    // Zoom window indicator (mini bar at bottom)
+    if (zoomSamples < (selectedLapData[0]?.samples.length || 1)) {
+      const total = selectedLapData[0].samples.length - 1;
+      const barY = height - 6;
+      const barW = graphWidth;
+      const barX = padding.left;
+      ctx.fillStyle = '#222';
+      ctx.fillRect(barX, barY, barW, 4);
+      ctx.fillStyle = '#3b82f6';
+      const rs = zStart / total;
+      const re = zEnd / total;
+      ctx.fillRect(barX + rs * barW, barY, (re - rs) * barW, 4);
+    }
+
     // Labels
     ctx.fillStyle = '#888';
     ctx.font = '10px monospace';
@@ -239,28 +254,28 @@ export default function SessionViewer() {
     ctx.fillText('350', padding.left - 5, padding.top + 5);
     ctx.fillText('175', padding.left - 5, padding.top + graphHeight / 2 + 5);
     ctx.fillText('0', padding.left - 5, padding.top + graphHeight - 5);
-    
-  }, [selectedLapData, showSpeed, showThrottle, showBrake, currentIndex, currentLapIndex]);
+
+  }, [selectedLapData, showSpeed, showThrottle, showBrake, currentIndex, currentLapIndex, zoomRange]);
 
   // Draw track map
   useEffect(() => {
     const canvas = trackCanvasRef.current;
     if (!canvas || selectedLapData.length === 0) return;
-    
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
+
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
-    
+
     const width = rect.width;
     const height = rect.height;
-    
+
     ctx.clearRect(0, 0, width, height);
-    
+
     // Find bounds
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     selectedLapData.forEach(lap => {
@@ -271,15 +286,15 @@ export default function SessionViewer() {
         maxZ = Math.max(maxZ, s.world_position_z);
       });
     });
-    
+
     const margin = 20;
     const mapWidth = maxX - minX || 1;
     const mapHeight = maxZ - minZ || 1;
     const scale = Math.min((width - margin * 2) / mapWidth, (height - margin * 2) / mapHeight);
-    
+
     const offsetX = (width - mapWidth * scale) / 2 - minX * scale;
     const offsetY = (height - mapHeight * scale) / 2 - minZ * scale;
-    
+
     // Draw track lines
     selectedLapData.forEach(lap => {
       ctx.strokeStyle = lap.color;
@@ -293,37 +308,112 @@ export default function SessionViewer() {
       });
       ctx.stroke();
     });
-    
+
     // Draw current position
     if (currentSample) {
       const x = currentSample.world_position_x * scale + offsetX;
       const y = currentSample.world_position_z * scale + offsetY;
-      
+
       ctx.fillStyle = '#fff';
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
-      
+
       ctx.strokeStyle = '#000';
       ctx.lineWidth = 1;
       ctx.stroke();
     }
   }, [selectedLapData, currentSample]);
 
-  const handleSeek = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const getSampleIndexFromX = useCallback((clientX: number): number => {
     const canvas = canvasRef.current;
-    if (!canvas || selectedLapData.length === 0) return;
-    
+    if (!canvas || selectedLapData.length === 0) return 0;
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+    const x = clientX - rect.left;
     const padding = { left: 50, right: 20 };
     const graphWidth = rect.width - padding.left - padding.right;
-    
-    const lap = selectedLapData[currentLapIndex % selectedLapData.length];
+    const [zStart, zEnd] = zoomRange;
+    const zoomSamples = Math.max(1, zEnd - zStart);
     const ratio = Math.max(0, Math.min(1, (x - padding.left) / graphWidth));
-    const idx = Math.floor(ratio * (lap.samples.length - 1));
-    setCurrentIndex(idx);
-  }, [selectedLapData, currentLapIndex]);
+    return Math.floor(zStart + ratio * zoomSamples);
+  }, [selectedLapData, zoomRange]);
+
+  const handleSeek = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isDragging.current) return;
+    const idx = getSampleIndexFromX(e.clientX);
+    const lap = selectedLapData[0];
+    if (lap) {
+      setCurrentIndex(Math.max(0, Math.min(lap.samples.length - 1, idx)));
+    }
+  }, [getSampleIndexFromX, selectedLapData]);
+
+  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    const lap = selectedLapData[0];
+    if (!lap || lap.samples.length < 2) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const padding = { left: 50, right: 20 };
+    const graphWidth = rect.width - padding.left - padding.right;
+    const mouseX = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, (mouseX - padding.left) / graphWidth));
+
+    const [zStart, zEnd] = zoomRange;
+    const zoomSamples = zEnd - zStart;
+    const total = lap.samples.length - 1;
+
+    // Zoom factor: wheel up (negative deltaY) = zoom in, down = zoom out
+    const factor = e.deltaY < 0 ? 0.85 : 1.15;
+    let newZoom = zoomSamples * factor;
+    newZoom = Math.max(20, Math.min(total, newZoom)); // min 20 samples visible
+
+    const centerSample = zStart + ratio * zoomSamples;
+    let newStart = centerSample - ratio * newZoom;
+    let newEnd = newStart + newZoom;
+
+    // Clamp
+    if (newStart < 0) { newStart = 0; newEnd = newZoom; }
+    if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - newZoom); }
+
+    setZoomRange([newStart, newEnd]);
+  }, [selectedLapData, zoomRange]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (e.button !== 0) return;
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartZoom.current = [...zoomRange];
+  }, [zoomRange]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDragging.current) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const padding = { left: 50, right: 20 };
+    const graphWidth = rect.width - padding.left - padding.right;
+    const lap = selectedLapData[0];
+    if (!lap) return;
+
+    const dx = e.clientX - dragStartX.current;
+    const [ds, de] = dragStartZoom.current;
+    const zoomSamples = de - ds;
+    const total = lap.samples.length - 1;
+    const sampleShift = -(dx / graphWidth) * zoomSamples;
+
+    let newStart = ds + sampleShift;
+    let newEnd = de + sampleShift;
+    if (newStart < 0) { newStart = 0; newEnd = zoomSamples; }
+    if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - zoomSamples); }
+
+    setZoomRange([newStart, newEnd]);
+  }, [selectedLapData]);
+
+  const handleMouseUp = useCallback(() => {
+    isDragging.current = false;
+  }, []);
 
   if (loading) {
     return (
@@ -432,164 +522,152 @@ export default function SessionViewer() {
           </div>
         </div>
 
-        {/* Center - Telemetry Graphs */}
+        {/* Center - Main View */}
         <div className="flex-1 flex flex-col gap-3 min-w-0">
-          {/* Graph Controls */}
+          {/* View + Graph Controls */}
           <div className="flex items-center gap-2 telemetry-panel p-2 shrink-0">
-            <button
-              onClick={() => setShowSpeed(!showSpeed)}
-              className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
-                showSpeed ? 'bg-motorsport-blue/20 text-motorsport-blue' : 'text-motorsport-muted'
-              }`}
-            >
-              <Activity className="w-3 h-3" />
-              Speed
-            </button>
-            <button
-              onClick={() => setShowThrottle(!showThrottle)}
-              className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
-                showThrottle ? 'bg-motorsport-green/20 text-motorsport-green' : 'text-motorsport-muted'
-              }`}
-            >
-              <Gauge className="w-3 h-3" />
-              Throttle
-            </button>
-            <button
-              onClick={() => setShowBrake(!showBrake)}
-              className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
-                showBrake ? 'bg-motorsport-red/20 text-motorsport-red' : 'text-motorsport-muted'
-              }`}
-            >
-              <Gauge className="w-3 h-3" />
-              Brake
-            </button>
+            {/* View toggle */}
+            <div className="flex items-center gap-1 mr-3 border-r border-motorsport-border pr-3">
+              <button
+                onClick={() => setViewMode('graph')}
+                className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
+                  viewMode === 'graph'
+                    ? 'bg-motorsport-blue/20 text-motorsport-blue'
+                    : 'text-motorsport-muted hover:bg-motorsport-surface'
+                }`}
+              >
+                <BarChart3 className="w-3 h-3" />
+                Graph
+              </button>
+              <button
+                onClick={() => setViewMode('track')}
+                className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
+                  viewMode === 'track'
+                    ? 'bg-motorsport-blue/20 text-motorsport-blue'
+                    : 'text-motorsport-muted hover:bg-motorsport-surface'
+                }`}
+              >
+                <MapIcon className="w-3 h-3" />
+                Track
+              </button>
+            </div>
+
+            {viewMode === 'graph' && (
+              <>
+                <button
+                  onClick={() => setShowSpeed(!showSpeed)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
+                    showSpeed ? 'bg-motorsport-blue/20 text-motorsport-blue' : 'text-motorsport-muted'
+                  }`}
+                >
+                  <Activity className="w-3 h-3" />
+                  Speed
+                </button>
+                <button
+                  onClick={() => setShowThrottle(!showThrottle)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
+                    showThrottle ? 'bg-motorsport-green/20 text-motorsport-green' : 'text-motorsport-muted'
+                  }`}
+                >
+                  <Gauge className="w-3 h-3" />
+                  Throttle
+                </button>
+                <button
+                  onClick={() => setShowBrake(!showBrake)}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
+                    showBrake ? 'bg-motorsport-red/20 text-motorsport-red' : 'text-motorsport-muted'
+                  }`}
+                >
+                  <Gauge className="w-3 h-3" />
+                  Brake
+                </button>
+              </>
+            )}
           </div>
 
-          {/* Main Graph */}
-          <div className="flex-1 telemetry-panel min-h-0 relative">
-            <canvas
-              ref={canvasRef}
-              className="w-full h-full cursor-crosshair"
-              onClick={handleSeek}
-            />
-          </div>
-
-          {/* Replay Controls */}
-          <div className="telemetry-panel p-2 shrink-0">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCurrentIndex(0)}
-                  className="p-1.5 hover:bg-motorsport-surface rounded-sm transition-colors"
-                >
-                  <SkipBack className="w-4 h-4 text-motorsport-text" />
-                </button>
-                <button
-                  onClick={() => setReplayPlaying(!replayPlaying)}
-                  className="p-1.5 bg-motorsport-orange rounded-sm hover:bg-motorsport-orange/90 transition-colors"
-                >
-                  {replayPlaying ? (
-                    <Pause className="w-4 h-4 text-motorsport-black" />
-                  ) : (
-                    <Play className="w-4 h-4 text-motorsport-black" />
-                  )}
-                </button>
-                <button
-                  onClick={() => {
-                    const lap = selectedLapData[currentLapIndex % selectedLapData.length];
-                    if (lap) setCurrentIndex(lap.samples.length - 1);
-                  }}
-                  className="p-1.5 hover:bg-motorsport-surface rounded-sm transition-colors"
-                >
-                  <SkipForward className="w-4 h-4 text-motorsport-text" />
-                </button>
-                <div className="flex items-center gap-1 ml-2">
-                  <span className="text-[10px] text-motorsport-muted">Speed</span>
-                  {[0.5, 1, 2, 4].map(s => (
-                    <button
-                      key={s}
-                      onClick={() => setReplaySpeed(s)}
-                      className={`px-1.5 py-0.5 rounded-sm text-[10px] ${
-                        replaySpeed === s
-                          ? 'bg-motorsport-orange text-motorsport-black'
-                          : 'text-motorsport-muted hover:bg-motorsport-surface'
-                      }`}
-                    >
-                      {s}x
-                    </button>
-                  ))}
+          {/* Main content area */}
+          {viewMode === 'graph' ? (
+            <div className="flex-1 telemetry-panel min-h-0 relative">
+              <canvas
+                ref={canvasRef}
+                className="w-full h-full cursor-crosshair"
+                onClick={handleSeek}
+                onWheel={handleWheel}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+              />
+            </div>
+          ) : (
+            <div className="flex-1 telemetry-panel min-h-0 relative flex flex-col">
+              <div className="p-2 border-b border-motorsport-border shrink-0">
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-3.5 h-3.5 text-motorsport-orange" />
+                  <span className="text-xs font-semibold">TRACK MAP</span>
                 </div>
               </div>
-
-              {/* Current Values */}
-              {currentSample && (
-                <div className="flex items-center gap-4 text-xs">
-                  <div className="text-right">
-                    <span className="text-[10px] text-motorsport-muted block">Speed</span>
-                    <span className="font-telemetry text-motorsport-cyan">{currentSample.speed_kmh.toFixed(0)}</span>
-                    <span className="text-[10px] text-motorsport-muted"> km/h</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] text-motorsport-muted block">Throttle</span>
-                    <span className="font-telemetry text-motorsport-green">{(currentSample.throttle * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] text-motorsport-muted block">Brake</span>
-                    <span className="font-telemetry text-motorsport-red">{(currentSample.brake * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] text-motorsport-muted block">Gear</span>
-                    <span className="font-telemetry text-motorsport-text">{currentSample.gear}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] text-motorsport-muted block">RPM</span>
-                    <span className="font-telemetry text-motorsport-orange">{currentSample.rpm}</span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] text-motorsport-muted block">Position</span>
-                    <span className="font-telemetry text-motorsport-text">{(currentSample.normalized_track_position * 100).toFixed(1)}%</span>
+              <div className="flex-1 p-2 min-h-0">
+                <canvas
+                  ref={trackCanvasRef}
+                  className="w-full h-full"
+                />
+              </div>
+              {/* Lap Comparison */}
+              {selectedLapData.length > 1 && (
+                <div className="p-2 border-t border-motorsport-border shrink-0">
+                  <span className="text-[10px] text-motorsport-muted uppercase tracking-wider">Delta</span>
+                  <div className="mt-1 space-y-1">
+                    {selectedLapData.map((lap, i) => {
+                      if (i === 0) return null;
+                      const refLap = selectedLapData[0];
+                      const refTime = refLap.lap.lap_time_ms || 0;
+                      const lapTime = lap.lap.lap_time_ms || 0;
+                      const delta = lapTime - refTime;
+                      return (
+                        <div key={lap.lap.id} className="flex items-center justify-between text-xs">
+                          <span style={{ color: lap.color }}>Lap {lap.lap.lap_number}</span>
+                          <span className={`font-telemetry ${delta > 0 ? 'text-motorsport-red' : 'text-motorsport-green'}`}>
+                            {delta >= 0 ? '+' : ''}{(delta / 1000).toFixed(3)}s
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
             </div>
-          </div>
-        </div>
+          )}
 
-        {/* Right - Track Map */}
-        <div className="w-64 telemetry-panel flex flex-col shrink-0">
-          <div className="p-2 border-b border-motorsport-border">
-            <div className="flex items-center gap-2">
-              <MapPin className="w-3.5 h-3.5 text-motorsport-orange" />
-              <span className="text-xs font-semibold">TRACK MAP</span>
-            </div>
-          </div>
-          <div className="flex-1 p-2 min-h-0">
-            <canvas
-              ref={trackCanvasRef}
-              className="w-full h-full"
-            />
-          </div>
-          
-          {/* Lap Comparison */}
-          {selectedLapData.length > 1 && (
-            <div className="p-2 border-t border-motorsport-border">
-              <span className="text-[10px] text-motorsport-muted uppercase tracking-wider">Delta</span>
-              <div className="mt-1 space-y-1">
-                {selectedLapData.map((lap, i) => {
-                  if (i === 0) return null;
-                  const refLap = selectedLapData[0];
-                  const refTime = refLap.lap.lap_time_ms || 0;
-                  const lapTime = lap.lap.lap_time_ms || 0;
-                  const delta = lapTime - refTime;
-                  return (
-                    <div key={lap.lap.id} className="flex items-center justify-between text-xs">
-                      <span style={{ color: lap.color }}>Lap {lap.lap.lap_number}</span>
-                      <span className={`font-telemetry ${delta > 0 ? 'text-motorsport-red' : 'text-motorsport-green'}`}>
-                        {delta >= 0 ? '+' : ''}{(delta / 1000).toFixed(3)}s
-                      </span>
-                    </div>
-                  );
-                })}
+          {/* Current Values — always visible */}
+          {currentSample && (
+            <div className="telemetry-panel p-2 shrink-0">
+              <div className="flex items-center justify-end gap-4 text-xs">
+                <div className="text-right">
+                  <span className="text-[10px] text-motorsport-muted block">Speed</span>
+                  <span className="font-telemetry text-motorsport-blue">{currentSample.speed_kmh.toFixed(0)}</span>
+                  <span className="text-[10px] text-motorsport-muted"> km/h</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-motorsport-muted block">Throttle</span>
+                  <span className="font-telemetry text-motorsport-green">{(currentSample.throttle * 100).toFixed(0)}%</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-motorsport-muted block">Brake</span>
+                  <span className="font-telemetry text-motorsport-red">{(currentSample.brake * 100).toFixed(0)}%</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-motorsport-muted block">Gear</span>
+                  <span className="font-telemetry text-motorsport-text">{currentSample.gear}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-motorsport-muted block">RPM</span>
+                  <span className="font-telemetry text-motorsport-orange">{currentSample.rpm}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-motorsport-muted block">Position</span>
+                  <span className="font-telemetry text-motorsport-text">{(currentSample.normalized_track_position * 100).toFixed(1)}%</span>
+                </div>
               </div>
             </div>
           )}

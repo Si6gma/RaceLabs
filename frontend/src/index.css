@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-motorsport-black text-motorsport-text;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-motorsport-charcoal;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-motorsport-dim rounded-sm;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-motorsport-muted;
+  }
+}
+
+@layer components {
+  .telemetry-panel {
+    @apply bg-motorsport-panel border border-motorsport-border rounded-sm;
+  }
+  
+  .telemetry-value {
+    @apply font-telemetry text-sm tabular-nums;
+  }
+  
+  .telemetry-label {
+    @apply text-xs text-motorsport-muted uppercase tracking-wider;
+  }
+  
+  .gauge-bar {
+    @apply h-1.5 bg-motorsport-charcoal rounded-sm overflow-hidden;
+  }
+  
+  .gauge-fill {
+    @apply h-full transition-all duration-75 ease-out;
+  }
+}
+
+@layer utilities {
+  .text-glow-orange {
+    text-shadow: 0 0 10px rgba(255, 107, 0, 0.4);
+  }
+  
+  .text-glow-cyan {
+    text-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+  }
+}

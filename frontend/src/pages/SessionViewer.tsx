@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import {
-  ArrowLeft, Gauge, MapPin, Layers, Download, Activity,
-  BarChart3, Map as MapIcon
+  ArrowLeft, MapPin, Layers, Download, Activity,
+  BarChart3, Map as MapIcon, SlidersHorizontal, Lock, Unlock
 } from 'lucide-react';
 import type { TelemetrySample, ImportedLap, ImportedSession } from '@/types/telemetry';
 
@@ -16,18 +16,34 @@ interface LapTelemetry {
 }
 
 const LAP_COLORS = [
-  '#3b82f6', // blue
-  '#22c55e', // green
-  '#f59e0b', // amber
-  '#ef4444', // red
-  '#a855f7', // purple
-  '#06b6d4', // cyan
+  '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4',
 ];
 
-// Fixed telemetry colors
-const COLOR_SPEED = '#3b82f6';
-const COLOR_THROTTLE = '#22c55e';
-const COLOR_BRAKE = '#ef4444';
+interface ChannelDef {
+  key: keyof TelemetrySample;
+  label: string;
+  color: string;
+  min: number;
+  max: number;
+  scale: number;   // fraction of graph height
+  offset: number;  // fraction from top (0=top, 1=bottom)
+  unit: string;
+  transform?: (v: number) => number;
+  decimals: number;
+}
+
+const CHANNELS: ChannelDef[] = [
+  { key: 'speed_kmh', label: 'Speed', color: '#3b82f6', min: 0, max: 350, scale: 1.0, offset: 0, unit: ' km/h', decimals: 0 },
+  { key: 'rpm', label: 'RPM', color: '#a855f7', min: 0, max: 15000, scale: 1.0, offset: 0, unit: '', decimals: 0 },
+  { key: 'throttle', label: 'Throttle', color: '#22c55e', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
+  { key: 'brake', label: 'Brake', color: '#ef4444', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
+  { key: 'steering', label: 'Steering', color: '#06b6d4', min: -1, max: 1, scale: 0.35, offset: 0.325, unit: '%', transform: v => v * 100, decimals: 0 },
+  { key: 'gear', label: 'Gear', color: '#f59e0b', min: 0, max: 8, scale: 0.18, offset: 0.8, unit: '', decimals: 0 },
+  { key: 'gforce_lat', label: 'G-Force', color: '#ec4899', min: 0, max: 6, scale: 0.22, offset: 0, unit: 'G', decimals: 2 },
+  { key: 'delta_time', label: 'Delta', color: '#ffffff', min: -5, max: 5, scale: 0.3, offset: 0.35, unit: 's', decimals: 3 },
+];
+
+const DEFAULT_VISIBLE = new Set(['speed_kmh', 'throttle', 'brake']);
 
 export default function SessionViewer() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -42,13 +58,18 @@ export default function SessionViewer() {
   const [currentLapIndex, setCurrentLapIndex] = useState(0);
 
   const [viewMode, setViewMode] = useState<'graph' | 'track'>('graph');
-  const [showThrottle, setShowThrottle] = useState(true);
-  const [showBrake, setShowBrake] = useState(true);
-  const [showSpeed, setShowSpeed] = useState(true);
+  const [visibleChannels, setVisibleChannels] = useState<Set<string>>(new Set(DEFAULT_VISIBLE));
+  const [filterOpen, setFilterOpen] = useState(false);
+
+  // Cursor: hover follows mouse, click locks/unlocks
+  const [cursorLocked, setCursorLocked] = useState(false);
+  const [hoverIndex, setHoverIndex] = useState(0);
+  const hoverIndexRef = useRef(0);
 
   // Zoom state: sample index range [start, end]
   const [zoomRange, setZoomRange] = useState<[number, number]>([0, 1]);
   const isDragging = useRef(false);
+  const hasDragged = useRef(false);
   const dragStartX = useRef(0);
   const dragStartZoom = useRef<[number, number]>([0, 1]);
 
@@ -68,7 +89,6 @@ export default function SessionViewer() {
         setSession(data);
         setSelectedImportedSession(data);
 
-        // Load telemetry for all laps
         const lapData: LapTelemetry[] = [];
         for (let i = 0; i < data.laps.length; i++) {
           const lap = data.laps[i];
@@ -84,7 +104,6 @@ export default function SessionViewer() {
         }
         setLaps(lapData);
 
-        // Auto-select first valid lap
         const firstValid = lapData.findIndex(l => l.lap.valid);
         if (firstValid >= 0) {
           setSelectedLaps(new Set([firstValid]));
@@ -100,19 +119,20 @@ export default function SessionViewer() {
     load();
   }, [sessionId, setSelectedImportedSession]);
 
-  // Get currently selected lap data
   const selectedLapData = useMemo(() => {
     const indices = Array.from(selectedLaps);
     if (indices.length === 0 && laps.length > 0) return [laps[0]];
     return indices.map(i => laps[i]).filter(Boolean);
   }, [selectedLaps, laps]);
 
+  const effectiveIndex = cursorLocked ? currentIndex : hoverIndex;
+
   const currentSample = useMemo(() => {
     if (selectedLapData.length === 0) return null;
     const lap = selectedLapData[currentLapIndex % selectedLapData.length];
-    if (!lap || !lap.samples[currentIndex]) return null;
-    return lap.samples[currentIndex];
-  }, [selectedLapData, currentLapIndex, currentIndex]);
+    if (!lap || !lap.samples[effectiveIndex]) return null;
+    return lap.samples[effectiveIndex];
+  }, [selectedLapData, currentLapIndex, effectiveIndex]);
 
   // Reset zoom when selected laps change
   useEffect(() => {
@@ -120,6 +140,9 @@ export default function SessionViewer() {
     if (lap && lap.samples.length > 1) {
       setZoomRange([0, lap.samples.length - 1]);
       setCurrentIndex(0);
+      setHoverIndex(0);
+      hoverIndexRef.current = 0;
+      setCursorLocked(false);
     }
   }, [selectedLapData.map(l => l.lap.id).join(',')]);
 
@@ -139,7 +162,7 @@ export default function SessionViewer() {
 
     const width = rect.width;
     const height = rect.height;
-    const padding = { top: 20, right: 20, bottom: 30, left: 50 };
+    const padding = { top: 20, right: 60, bottom: 30, left: 50 };
     const graphWidth = width - padding.left - padding.right;
     const graphHeight = height - padding.top - padding.bottom;
 
@@ -148,7 +171,7 @@ export default function SessionViewer() {
     const [zStart, zEnd] = zoomRange;
     const zoomSamples = Math.max(1, zEnd - zStart);
 
-    // Draw grid
+    // Grid
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 0.5;
     for (let i = 0; i <= 5; i++) {
@@ -159,78 +182,53 @@ export default function SessionViewer() {
       ctx.stroke();
     }
 
-    // Draw each selected lap
-    selectedLapData.forEach((lapData) => {
-      const samples = lapData.samples;
-      if (samples.length < 2) return;
+    // Draw each visible channel for each selected lap
+    CHANNELS.forEach(ch => {
+      if (!visibleChannels.has(ch.key as string)) return;
 
-      const xScale = graphWidth / zoomSamples;
+      selectedLapData.forEach((lapData) => {
+        const samples = lapData.samples;
+        if (samples.length < 2) return;
 
-      // Speed
-      if (showSpeed) {
-        ctx.strokeStyle = COLOR_SPEED;
-        ctx.lineWidth = 1.5;
+        const xScale = graphWidth / zoomSamples;
+        const startI = Math.max(0, Math.floor(zStart));
+        const endI = Math.min(samples.length - 1, Math.ceil(zEnd));
+
+        ctx.strokeStyle = ch.color;
+        ctx.lineWidth = ch.key === 'speed_kmh' || ch.key === 'rpm' ? 1.5 : 1;
+        if (ch.key === 'throttle' || ch.key === 'brake') ctx.globalAlpha = 0.35;
+        else if (ch.key === 'delta_time') ctx.globalAlpha = 0.6;
+        else ctx.globalAlpha = 0.9;
+
         ctx.beginPath();
-        for (let i = Math.floor(zStart); i <= Math.ceil(zEnd) && i < samples.length; i++) {
+        let first = true;
+        for (let i = startI; i <= endI; i++) {
           const s = samples[i];
+          const val = s[ch.key] as number;
           const x = padding.left + (i - zStart) * xScale;
-          const y = padding.top + graphHeight - (s.speed_kmh / 350) * graphHeight;
-          if (i === Math.floor(zStart)) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-      }
-
-      // Throttle
-      if (showThrottle) {
-        ctx.strokeStyle = COLOR_THROTTLE;
-        ctx.globalAlpha = 0.3;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let i = Math.floor(zStart); i <= Math.ceil(zEnd) && i < samples.length; i++) {
-          const s = samples[i];
-          const x = padding.left + (i - zStart) * xScale;
-          const y = padding.top + graphHeight - s.throttle * graphHeight * 0.3;
-          if (i === Math.floor(zStart)) ctx.moveTo(x, y);
+          const normalized = (val - ch.min) / (ch.max - ch.min);
+          const y = padding.top + graphHeight * ch.offset + graphHeight * ch.scale * (1 - normalized);
+          if (first) { ctx.moveTo(x, y); first = false; }
           else ctx.lineTo(x, y);
         }
         ctx.stroke();
         ctx.globalAlpha = 1;
-      }
-
-      // Brake
-      if (showBrake) {
-        ctx.strokeStyle = COLOR_BRAKE;
-        ctx.globalAlpha = 0.3;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let i = Math.floor(zStart); i <= Math.ceil(zEnd) && i < samples.length; i++) {
-          const s = samples[i];
-          const x = padding.left + (i - zStart) * xScale;
-          const y = padding.top + graphHeight - s.brake * graphHeight * 0.3;
-          if (i === Math.floor(zStart)) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      }
+      });
     });
 
-    // Draw cursor
-    if (currentSample && selectedLapData.length > 0) {
-      if (currentIndex >= zStart && currentIndex <= zEnd) {
-        const xScale = graphWidth / zoomSamples;
-        const x = padding.left + (currentIndex - zStart) * xScale;
+    // Cursor line at effectiveIndex
+    if (effectiveIndex >= zStart && effectiveIndex <= zEnd) {
+      const xScale = graphWidth / zoomSamples;
+      const x = padding.left + (effectiveIndex - zStart) * xScale;
 
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(x, padding.top);
-        ctx.lineTo(x, height - padding.bottom);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
+      ctx.strokeStyle = cursorLocked ? '#fff' : 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash(cursorLocked ? [4, 4] : [2, 6]);
+      ctx.beginPath();
+      ctx.moveTo(x, padding.top);
+      ctx.lineTo(x, height - padding.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     // Zoom window indicator (mini bar at bottom)
@@ -247,7 +245,7 @@ export default function SessionViewer() {
       ctx.fillRect(barX + rs * barW, barY, (re - rs) * barW, 4);
     }
 
-    // Labels
+    // Y-axis labels (Speed primary)
     ctx.fillStyle = '#888';
     ctx.font = '10px monospace';
     ctx.textAlign = 'right';
@@ -255,7 +253,18 @@ export default function SessionViewer() {
     ctx.fillText('175', padding.left - 5, padding.top + graphHeight / 2 + 5);
     ctx.fillText('0', padding.left - 5, padding.top + graphHeight - 5);
 
-  }, [selectedLapData, showSpeed, showThrottle, showBrake, currentIndex, currentLapIndex, zoomRange]);
+    // Right-side channel labels
+    ctx.textAlign = 'left';
+    let labelY = padding.top + 10;
+    CHANNELS.forEach(ch => {
+      if (!visibleChannels.has(ch.key as string)) return;
+      ctx.fillStyle = ch.color;
+      ctx.font = '9px monospace';
+      ctx.fillText(ch.label, width - padding.right + 6, labelY);
+      labelY += 12;
+    });
+
+  }, [selectedLapData, visibleChannels, currentIndex, hoverIndex, cursorLocked, zoomRange]);
 
   // Draw track map
   useEffect(() => {
@@ -276,7 +285,6 @@ export default function SessionViewer() {
 
     ctx.clearRect(0, 0, width, height);
 
-    // Find bounds
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     selectedLapData.forEach(lap => {
       lap.samples.forEach(s => {
@@ -295,7 +303,6 @@ export default function SessionViewer() {
     const offsetX = (width - mapWidth * scale) / 2 - minX * scale;
     const offsetY = (height - mapHeight * scale) / 2 - minZ * scale;
 
-    // Draw track lines
     selectedLapData.forEach(lap => {
       ctx.strokeStyle = lap.color;
       ctx.lineWidth = 2;
@@ -309,16 +316,13 @@ export default function SessionViewer() {
       ctx.stroke();
     });
 
-    // Draw current position
     if (currentSample) {
       const x = currentSample.world_position_x * scale + offsetX;
       const y = currentSample.world_position_z * scale + offsetY;
-
       ctx.fillStyle = '#fff';
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
-
       ctx.strokeStyle = '#000';
       ctx.lineWidth = 1;
       ctx.stroke();
@@ -330,22 +334,13 @@ export default function SessionViewer() {
     if (!canvas || selectedLapData.length === 0) return 0;
     const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
-    const padding = { left: 50, right: 20 };
+    const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
     const [zStart, zEnd] = zoomRange;
     const zoomSamples = Math.max(1, zEnd - zStart);
     const ratio = Math.max(0, Math.min(1, (x - padding.left) / graphWidth));
     return Math.floor(zStart + ratio * zoomSamples);
   }, [selectedLapData, zoomRange]);
-
-  const handleSeek = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isDragging.current) return;
-    const idx = getSampleIndexFromX(e.clientX);
-    const lap = selectedLapData[0];
-    if (lap) {
-      setCurrentIndex(Math.max(0, Math.min(lap.samples.length - 1, idx)));
-    }
-  }, [getSampleIndexFromX, selectedLapData]);
 
   const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
@@ -355,7 +350,7 @@ export default function SessionViewer() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const padding = { left: 50, right: 20 };
+    const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
     const mouseX = e.clientX - rect.left;
     const ratio = Math.max(0, Math.min(1, (mouseX - padding.left) / graphWidth));
@@ -364,16 +359,14 @@ export default function SessionViewer() {
     const zoomSamples = zEnd - zStart;
     const total = lap.samples.length - 1;
 
-    // Zoom factor: wheel up (negative deltaY) = zoom in, down = zoom out
     const factor = e.deltaY < 0 ? 0.85 : 1.15;
     let newZoom = zoomSamples * factor;
-    newZoom = Math.max(20, Math.min(total, newZoom)); // min 20 samples visible
+    newZoom = Math.max(20, Math.min(total, newZoom));
 
     const centerSample = zStart + ratio * zoomSamples;
     let newStart = centerSample - ratio * newZoom;
     let newEnd = newStart + newZoom;
 
-    // Clamp
     if (newStart < 0) { newStart = 0; newEnd = newZoom; }
     if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - newZoom); }
 
@@ -383,25 +376,36 @@ export default function SessionViewer() {
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (e.button !== 0) return;
     isDragging.current = true;
+    hasDragged.current = false;
     dragStartX.current = e.clientX;
     dragStartZoom.current = [...zoomRange];
   }, [zoomRange]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDragging.current) return;
+    if (!isDragging.current) {
+      const idx = getSampleIndexFromX(e.clientX);
+      const lap = selectedLapData[0];
+      const clamped = lap ? Math.max(0, Math.min(lap.samples.length - 1, idx)) : idx;
+      hoverIndexRef.current = clamped;
+      setHoverIndex(clamped);
+      return;
+    }
+
+    const dx = Math.abs(e.clientX - dragStartX.current);
+    if (dx > 4) hasDragged.current = true;
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const padding = { left: 50, right: 20 };
+    const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
     const lap = selectedLapData[0];
     if (!lap) return;
 
-    const dx = e.clientX - dragStartX.current;
     const [ds, de] = dragStartZoom.current;
     const zoomSamples = de - ds;
     const total = lap.samples.length - 1;
-    const sampleShift = -(dx / graphWidth) * zoomSamples;
+    const sampleShift = -(dx * Math.sign(e.clientX - dragStartX.current) / graphWidth) * zoomSamples;
 
     let newStart = ds + sampleShift;
     let newEnd = de + sampleShift;
@@ -409,11 +413,28 @@ export default function SessionViewer() {
     if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - zoomSamples); }
 
     setZoomRange([newStart, newEnd]);
-  }, [selectedLapData]);
+  }, [selectedLapData, getSampleIndexFromX]);
 
   const handleMouseUp = useCallback(() => {
+    if (isDragging.current && !hasDragged.current) {
+      if (cursorLocked) {
+        setCursorLocked(false);
+      } else {
+        setCurrentIndex(hoverIndexRef.current);
+        setCursorLocked(true);
+      }
+    }
     isDragging.current = false;
-  }, []);
+  }, [cursorLocked]);
+
+  const toggleChannel = (key: string) => {
+    setVisibleChannels(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   if (loading) {
     return (
@@ -485,14 +506,14 @@ export default function SessionViewer() {
                 key={lapData.lap.id}
                 onClick={() => {
                   const newSet = new Set(selectedLaps);
-                  if (newSet.has(idx)) {
-                    newSet.delete(idx);
-                  } else {
-                    newSet.add(idx);
-                  }
+                  if (newSet.has(idx)) newSet.delete(idx);
+                  else newSet.add(idx);
                   setSelectedLaps(newSet);
                   setCurrentLapIndex(idx);
                   setCurrentIndex(0);
+                  setHoverIndex(0);
+                  hoverIndexRef.current = 0;
+                  setCursorLocked(false);
                 }}
                 className={`w-full text-left p-2 rounded-sm text-xs transition-colors ${
                   selectedLaps.has(idx)
@@ -524,10 +545,10 @@ export default function SessionViewer() {
 
         {/* Center - Main View */}
         <div className="flex-1 flex flex-col gap-3 min-w-0">
-          {/* View + Graph Controls */}
+          {/* Controls bar */}
           <div className="flex items-center gap-2 telemetry-panel p-2 shrink-0">
             {/* View toggle */}
-            <div className="flex items-center gap-1 mr-3 border-r border-motorsport-border pr-3">
+            <div className="flex items-center gap-1 mr-2 border-r border-motorsport-border pr-2">
               <button
                 onClick={() => setViewMode('graph')}
                 className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
@@ -554,33 +575,86 @@ export default function SessionViewer() {
 
             {viewMode === 'graph' && (
               <>
-                <button
-                  onClick={() => setShowSpeed(!showSpeed)}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
-                    showSpeed ? 'bg-motorsport-blue/20 text-motorsport-blue' : 'text-motorsport-muted'
+                {/* Active channel pills */}
+                {CHANNELS.filter(c => visibleChannels.has(c.key as string)).map(ch => (
+                  <button
+                    key={ch.key}
+                    onClick={() => toggleChannel(ch.key as string)}
+                    className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors"
+                    style={{
+                      backgroundColor: `${ch.color}20`,
+                      color: ch.color,
+                    }}
+                  >
+                    <Activity className="w-3 h-3" />
+                    {ch.label}
+                  </button>
+                ))}
+
+                {/* Filter menu */}
+                <div className="relative ml-auto">
+                  <button
+                    onClick={() => setFilterOpen(!filterOpen)}
+                    className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
+                      filterOpen ? 'bg-motorsport-orange/20 text-motorsport-orange' : 'text-motorsport-muted hover:bg-motorsport-surface'
+                    }`}
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    Filters
+                  </button>
+                  {filterOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setFilterOpen(false)} />
+                      <div className="absolute right-0 top-full mt-1 z-50 w-52 bg-motorsport-charcoal border border-motorsport-border rounded-sm shadow-lg p-2">
+                        <div className="flex items-center justify-between mb-2 pb-1 border-b border-motorsport-border">
+                          <span className="text-[10px] font-semibold text-motorsport-muted uppercase">Channels</span>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => setVisibleChannels(new Set(CHANNELS.map(c => c.key as string)))}
+                              className="text-[9px] text-motorsport-blue hover:underline"
+                            >
+                              All
+                            </button>
+                            <button
+                              onClick={() => setVisibleChannels(new Set())}
+                              className="text-[9px] text-motorsport-muted hover:underline"
+                            >
+                              None
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          {CHANNELS.map(ch => (
+                            <label
+                              key={ch.key}
+                              className="flex items-center gap-2 px-1 py-1 rounded-sm hover:bg-motorsport-surface/50 cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={visibleChannels.has(ch.key as string)}
+                                onChange={() => toggleChannel(ch.key as string)}
+                                className="w-3 h-3 rounded-sm accent-motorsport-orange"
+                              />
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: ch.color }} />
+                              <span className="text-[11px] text-motorsport-text">{ch.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Lock indicator */}
+                <div
+                  className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] ${
+                    cursorLocked ? 'text-motorsport-orange' : 'text-motorsport-muted'
                   }`}
+                  title={cursorLocked ? 'Click graph to unlock cursor' : 'Click graph to lock cursor'}
                 >
-                  <Activity className="w-3 h-3" />
-                  Speed
-                </button>
-                <button
-                  onClick={() => setShowThrottle(!showThrottle)}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
-                    showThrottle ? 'bg-motorsport-green/20 text-motorsport-green' : 'text-motorsport-muted'
-                  }`}
-                >
-                  <Gauge className="w-3 h-3" />
-                  Throttle
-                </button>
-                <button
-                  onClick={() => setShowBrake(!showBrake)}
-                  className={`flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] transition-colors ${
-                    showBrake ? 'bg-motorsport-red/20 text-motorsport-red' : 'text-motorsport-muted'
-                  }`}
-                >
-                  <Gauge className="w-3 h-3" />
-                  Brake
-                </button>
+                  {cursorLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                  {cursorLocked ? 'Locked' : 'Following'}
+                </div>
               </>
             )}
           </div>
@@ -590,8 +664,7 @@ export default function SessionViewer() {
             <div className="flex-1 telemetry-panel min-h-0 relative">
               <canvas
                 ref={canvasRef}
-                className="w-full h-full cursor-crosshair"
-                onClick={handleSeek}
+                className={`w-full h-full ${cursorLocked ? 'cursor-pointer' : 'cursor-crosshair'}`}
                 onWheel={handleWheel}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
@@ -613,7 +686,6 @@ export default function SessionViewer() {
                   className="w-full h-full"
                 />
               </div>
-              {/* Lap Comparison */}
               {selectedLapData.length > 1 && (
                 <div className="p-2 border-t border-motorsport-border shrink-0">
                   <span className="text-[10px] text-motorsport-muted uppercase tracking-wider">Delta</span>
@@ -639,35 +711,23 @@ export default function SessionViewer() {
             </div>
           )}
 
-          {/* Current Values — always visible */}
-          {currentSample && (
+          {/* Current Values — dynamic based on visible channels */}
+          {currentSample && viewMode === 'graph' && (
             <div className="telemetry-panel p-2 shrink-0">
-              <div className="flex items-center justify-end gap-4 text-xs">
-                <div className="text-right">
-                  <span className="text-[10px] text-motorsport-muted block">Speed</span>
-                  <span className="font-telemetry text-motorsport-blue">{currentSample.speed_kmh.toFixed(0)}</span>
-                  <span className="text-[10px] text-motorsport-muted"> km/h</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-motorsport-muted block">Throttle</span>
-                  <span className="font-telemetry text-motorsport-green">{(currentSample.throttle * 100).toFixed(0)}%</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-motorsport-muted block">Brake</span>
-                  <span className="font-telemetry text-motorsport-red">{(currentSample.brake * 100).toFixed(0)}%</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-motorsport-muted block">Gear</span>
-                  <span className="font-telemetry text-motorsport-text">{currentSample.gear}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-motorsport-muted block">RPM</span>
-                  <span className="font-telemetry text-motorsport-orange">{currentSample.rpm}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-motorsport-muted block">Position</span>
-                  <span className="font-telemetry text-motorsport-text">{(currentSample.normalized_track_position * 100).toFixed(1)}%</span>
-                </div>
+              <div className="flex items-center justify-end gap-4 text-xs flex-wrap">
+                {CHANNELS.filter(c => visibleChannels.has(c.key as string)).map(ch => {
+                  const raw = currentSample[ch.key] as number;
+                  const display = ch.transform ? ch.transform(raw) : raw;
+                  return (
+                    <div key={ch.key} className="text-right">
+                      <span className="text-[10px] text-motorsport-muted block">{ch.label}</span>
+                      <span className="font-telemetry" style={{ color: ch.color }}>
+                        {display.toFixed(ch.decimals)}
+                      </span>
+                      <span className="text-[10px] text-motorsport-muted">{ch.unit}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

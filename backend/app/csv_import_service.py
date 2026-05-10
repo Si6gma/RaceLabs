@@ -370,13 +370,27 @@ class CSVImportService:
         }
     
     async def delete_session(self, session_id: str) -> bool:
-        """Delete a session and all its data."""
+        """Delete a session and all its data.
+        
+        Deletes child records (samples, laps) first to avoid FK constraint violations,
+        since the raw SQL delete does not trigger SQLAlchemy ORM cascades.
+        """
+        sid = uuid.UUID(session_id)
         try:
+            # Delete samples first (they reference both session and lap)
             await self.db.execute(
-                delete(ImportedSession).where(ImportedSession.id == uuid.UUID(session_id))
+                delete(TelemetrySample).where(TelemetrySample.session_id == sid)
+            )
+            # Delete laps (they reference session)
+            await self.db.execute(
+                delete(ImportedLap).where(ImportedLap.session_id == sid)
+            )
+            # Delete the session itself
+            result = await self.db.execute(
+                delete(ImportedSession).where(ImportedSession.id == sid)
             )
             await self.db.commit()
-            return True
+            return result.rowcount > 0
         except Exception as e:
             logger.error(f"Error deleting session: {e}")
             await self.db.rollback()

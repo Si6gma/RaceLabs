@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import type { TelemetryPoint } from '@/utils/telemetryAdapter';
 
 interface LapTrace {
@@ -13,28 +13,43 @@ interface Props {
 
 export default function TrackMapViewer({ laps, currentPoint }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const drawRef = useRef<() => void>(() => {});
+  const rafRef = useRef<number | null>(null);
 
+  // Pan/zoom state kept in refs — no React re-renders on interaction
+  const transformRef = useRef({ scale: 1, panX: 0, panY: 0 });
+  const isDragging = useRef(false);
+  const lastMouse = useRef({ x: 0, y: 0 });
+
+  const scheduleDraw = useCallback(() => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      drawRef.current();
+    });
+  }, []);
+
+  // Main draw effect — re-runs when lap data or current point changes
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || laps.length === 0) return;
 
-    function draw() {
-      const ctx = canvas!.getContext('2d');
+    const draw = () => {
+      const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
       const dpr = window.devicePixelRatio || 1;
-      const rect = canvas!.getBoundingClientRect();
+      const rect = canvas.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) return;
-      canvas!.width = rect.width * dpr;
-      canvas!.height = rect.height * dpr;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
       ctx.scale(dpr, dpr);
 
-      const width = rect.width;
-      const height = rect.height;
-      ctx.clearRect(0, 0, width, height);
+      const W = rect.width;
+      const H = rect.height;
+      ctx.clearRect(0, 0, W, H);
 
       // F1 coordinate system: X = lateral, Y = longitudinal (ground plane), Z = altitude.
-      // We use X and Y for the top-down track map.
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       laps.forEach(({ data }) => {
         data.forEach(s => {
@@ -46,50 +61,139 @@ export default function TrackMapViewer({ laps, currentPoint }: Props) {
           }
         });
       });
-
       if (!isFinite(minX)) return;
 
-      const margin = 20;
-      const mapWidth = maxX - minX || 1;
-      const mapHeight = maxY - minY || 1;
-      const scale = Math.min((width - margin * 2) / mapWidth, (height - margin * 2) / mapHeight);
-      const offsetX = (width - mapWidth * scale) / 2 - minX * scale;
-      const offsetY = (height - mapHeight * scale) / 2 - minY * scale;
+      const margin = 24;
+      const fitScale = Math.min(
+        (W - margin * 2) / (maxX - minX || 1),
+        (H - margin * 2) / (maxY - minY || 1),
+      );
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+
+      const { scale: uScale, panX, panY } = transformRef.current;
+      const S = fitScale * uScale;
+
+      // Draw in world-coordinate space
+      ctx.save();
+      ctx.translate(W / 2 + panX, H / 2 + panY);
+      ctx.scale(S, S);
+      ctx.translate(-cx, -cy);
 
       laps.forEach(({ data, color }, lapIdx) => {
         if (data.length === 0) return;
         ctx.strokeStyle = color;
-        ctx.lineWidth = lapIdx === 0 ? 2 : 1.5;
+        ctx.lineWidth = (lapIdx === 0 ? 2 : 1.5) / S;
         ctx.globalAlpha = laps.length === 1 ? 1 : 0.8;
         ctx.beginPath();
         data.forEach((s, i) => {
-          const x = s.world_position_x * scale + offsetX;
-          const y = s.world_position_y * scale + offsetY;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+          if (i === 0) ctx.moveTo(s.world_position_x, s.world_position_y);
+          else ctx.lineTo(s.world_position_x, s.world_position_y);
         });
         ctx.stroke();
       });
       ctx.globalAlpha = 1;
+      ctx.restore();
 
+      // Current-point dot — drawn in screen space so it's always 5px radius
       if (currentPoint) {
-        const x = currentPoint.world_position_x * scale + offsetX;
-        const y = currentPoint.world_position_y * scale + offsetY;
+        const sx = (currentPoint.world_position_x - cx) * S + W / 2 + panX;
+        const sy = (currentPoint.world_position_y - cy) * S + H / 2 + panY;
         ctx.fillStyle = '#fff';
         ctx.beginPath();
-        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.arc(sx, sy, 5, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#111';
+        ctx.lineWidth = 1.5;
         ctx.stroke();
       }
-    }
 
+      // Zoom-reset hint when zoomed in
+      if (uScale !== 1 || panX !== 0 || panY !== 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('double-click to reset', W - 8, H - 8);
+      }
+    };
+
+    drawRef.current = draw;
     draw();
+
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      drawRef.current = () => {};
+    };
   }, [laps, currentPoint]);
 
-  return <canvas ref={canvasRef} className="w-full h-full block" />;
+  // Wheel zoom — non-passive so we can preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      const rawF = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const t = transformRef.current;
+      const newScale = Math.max(0.5, Math.min(60, t.scale * rawF));
+      const f = newScale / t.scale; // actual factor after clamping
+
+      transformRef.current = {
+        scale: newScale,
+        panX: (mx - rect.width / 2) * (1 - f) + t.panX * f,
+        panY: (my - rect.height / 2) * (1 - f) + t.panY * f,
+      };
+      scheduleDraw();
+    };
+
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [scheduleDraw]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    isDragging.current = true;
+    lastMouse.current = { x: e.clientX, y: e.clientY };
+    e.preventDefault();
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!isDragging.current) return;
+    const dx = e.clientX - lastMouse.current.x;
+    const dy = e.clientY - lastMouse.current.y;
+    lastMouse.current = { x: e.clientX, y: e.clientY };
+    transformRef.current = {
+      ...transformRef.current,
+      panX: transformRef.current.panX + dx,
+      panY: transformRef.current.panY + dy,
+    };
+    scheduleDraw();
+  }, [scheduleDraw]);
+
+  const handleMouseUp = useCallback(() => {
+    isDragging.current = false;
+  }, []);
+
+  const handleDoubleClick = useCallback(() => {
+    transformRef.current = { scale: 1, panX: 0, panY: 0 };
+    scheduleDraw();
+  }, [scheduleDraw]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="w-full h-full block cursor-grab active:cursor-grabbing select-none"
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onDoubleClick={handleDoubleClick}
+    />
+  );
 }

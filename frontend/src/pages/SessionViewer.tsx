@@ -201,6 +201,12 @@ export default function SessionViewer() {
     return indices.map(i => laps[i]).filter(Boolean);
   }, [selectedLaps, laps]);
 
+  // Total sample range — based on the longest selected lap so all laps stay fully visible
+  const maxSamples = useMemo(
+    () => selectedLapData.length === 0 ? 0 : Math.max(...selectedLapData.map(l => l.samples.length)),
+    [selectedLapData],
+  );
+
   const effectiveIndex = cursorLocked ? currentIndex : hoverIndex;
 
   const currentSample = useMemo(() => {
@@ -225,7 +231,7 @@ export default function SessionViewer() {
 
   const getSampleIndexFromX = useCallback((clientX: number): number => {
     const container = graphContainerRef.current;
-    if (!container || selectedLapData.length === 0) return 0;
+    if (!container || maxSamples === 0) return 0;
     const rect = container.getBoundingClientRect();
     const x = clientX - rect.left;
     const padding = { left: 50, right: 60 };
@@ -233,39 +239,47 @@ export default function SessionViewer() {
     const [zStart, zEnd] = zoomRange;
     const zoomSamples = Math.max(1, zEnd - zStart);
     const ratio = Math.max(0, Math.min(1, (x - padding.left) / graphWidth));
-    return Math.floor(zStart + ratio * zoomSamples);
-  }, [selectedLapData, zoomRange]);
+    return Math.max(0, Math.min(maxSamples - 1, Math.floor(zStart + ratio * zoomSamples)));
+  }, [maxSamples, zoomRange]);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const lap = selectedLapData[0];
-    if (!lap || lap.samples.length < 2) return;
+  // Graph wheel zoom — stored in ref so the non-passive listener always has current values
+  const graphWheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  useEffect(() => {
+    graphWheelRef.current = (e: WheelEvent) => {
+      if (maxSamples < 2) return;
+      e.preventDefault();
 
-    const container = graphContainerRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const padding = { left: 50, right: 60 };
-    const graphWidth = rect.width - padding.left - padding.right;
-    const mouseX = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, (mouseX - padding.left) / graphWidth));
+      const container = graphContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const padding = { left: 50, right: 60 };
+      const graphWidth = rect.width - padding.left - padding.right;
+      const mouseX = e.clientX - rect.left;
+      const ratio = Math.max(0, Math.min(1, (mouseX - padding.left) / graphWidth));
 
-    const [zStart, zEnd] = zoomRange;
-    const zoomSamples = zEnd - zStart;
-    const total = lap.samples.length - 1;
+      const [zStart, zEnd] = zoomRange;
+      const zoomSamples = zEnd - zStart;
+      const total = maxSamples - 1;
 
-    const factor = e.deltaY < 0 ? 0.85 : 1.15;
-    let newZoom = zoomSamples * factor;
-    newZoom = Math.max(20, Math.min(total, newZoom));
+      const factor = e.deltaY < 0 ? 0.85 : 1.15;
+      let newZoom = Math.max(20, Math.min(total, zoomSamples * factor));
+      const center = zStart + ratio * zoomSamples;
+      let newStart = center - ratio * newZoom;
+      let newEnd = newStart + newZoom;
+      if (newStart < 0) { newStart = 0; newEnd = newZoom; }
+      if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - newZoom); }
+      setZoomRange([newStart, newEnd]);
+    };
+  }, [maxSamples, zoomRange]);
 
-    const centerSample = zStart + ratio * zoomSamples;
-    let newStart = centerSample - ratio * newZoom;
-    let newEnd = newStart + newZoom;
-
-    if (newStart < 0) { newStart = 0; newEnd = newZoom; }
-    if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - newZoom); }
-
-    setZoomRange([newStart, newEnd]);
-  }, [selectedLapData, zoomRange]);
+  // Attach non-passive wheel listener so e.preventDefault() actually suppresses page scroll
+  useEffect(() => {
+    const el = graphContainerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => graphWheelRef.current(e);
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -277,9 +291,7 @@ export default function SessionViewer() {
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging.current) {
-      const idx = getSampleIndexFromX(e.clientX);
-      const lap = selectedLapData[0];
-      const clamped = lap ? Math.max(0, Math.min(lap.samples.length - 1, idx)) : idx;
+      const clamped = getSampleIndexFromX(e.clientX);
       hoverIndexRef.current = clamped;
       setHoverIndex(clamped);
       return;
@@ -289,25 +301,22 @@ export default function SessionViewer() {
     if (dx > 4) hasDragged.current = true;
 
     const container = graphContainerRef.current;
-    if (!container) return;
+    if (!container || maxSamples === 0) return;
     const rect = container.getBoundingClientRect();
     const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
-    const lap = selectedLapData[0];
-    if (!lap) return;
 
     const [ds, de] = dragStartZoom.current;
     const zoomSamples = de - ds;
-    const total = lap.samples.length - 1;
+    const total = maxSamples - 1;
     const sampleShift = -(dx * Math.sign(e.clientX - dragStartX.current) / graphWidth) * zoomSamples;
 
     let newStart = ds + sampleShift;
     let newEnd = de + sampleShift;
     if (newStart < 0) { newStart = 0; newEnd = zoomSamples; }
     if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - zoomSamples); }
-
     setZoomRange([newStart, newEnd]);
-  }, [selectedLapData, getSampleIndexFromX]);
+  }, [maxSamples, getSampleIndexFromX]);
 
   const handleMouseUp = useCallback(() => {
     if (isDragging.current && !hasDragged.current) {
@@ -567,7 +576,6 @@ export default function SessionViewer() {
           <div
             ref={graphContainerRef}
             className={`flex-1 telemetry-panel min-h-0 relative ${viewMode !== 'graph' ? 'hidden' : ''}`}
-            onWheel={handleWheel}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}

@@ -559,61 +559,59 @@ export default function SessionViewer() {
             )}
           </div>
 
-          {/* Main content area */}
-          {viewMode === 'graph' ? (
-            <div
-              ref={graphContainerRef}
-              className="flex-1 telemetry-panel min-h-0 relative"
-              onWheel={handleWheel}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
-            >
-              <TelemetryGraphCanvas
-                laps={selectedLapData.map(l => ({ data: l.samples, color: l.color }))}
-                visibleChannels={visibleChannels}
-                zoomRange={zoomRange}
-                effectiveIndex={effectiveIndex}
-                cursorLocked={cursorLocked}
+          {/* Graph view — always mounted, hidden in track mode */}
+          <div
+            ref={graphContainerRef}
+            className={`flex-1 telemetry-panel min-h-0 relative ${viewMode !== 'graph' ? 'hidden' : ''}`}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+          >
+            <TelemetryGraphCanvas
+              laps={selectedLapData.map(l => ({ data: l.samples, color: l.color }))}
+              visibleChannels={visibleChannels}
+              zoomRange={zoomRange}
+              effectiveIndex={effectiveIndex}
+              cursorLocked={cursorLocked}
+            />
+          </div>
+
+          {/* Track view — always mounted, hidden in graph mode */}
+          <div className={`flex-1 telemetry-panel min-h-0 relative flex flex-col ${viewMode !== 'track' ? 'hidden' : ''}`}>
+            <div className="panel-header shrink-0">
+              <MapPin className="w-3.5 h-3.5 text-motorsport-orange" />
+              <span className="text-[10px] font-semibold tracking-widest uppercase text-motorsport-text">Track Map</span>
+            </div>
+            <div className="flex-1 p-2 min-h-0">
+              <TrackMapViewer
+                laps={selectedLapData.map(lap => ({ data: lap.samples, color: lap.color }))}
+                currentPoint={currentSample}
               />
             </div>
-          ) : (
-            <div className="flex-1 telemetry-panel min-h-0 relative flex flex-col">
-              <div className="panel-header shrink-0">
-                <MapPin className="w-3.5 h-3.5 text-motorsport-orange" />
-                <span className="text-[10px] font-semibold tracking-widest uppercase text-motorsport-text">Track Map</span>
-              </div>
-              <div className="flex-1 p-2 min-h-0">
-                <TrackMapViewer
-                  laps={selectedLapData.map(lap => ({ data: lap.samples, color: lap.color }))}
-                  currentPoint={currentSample}
-                />
-              </div>
-              {selectedLapData.length > 1 && (
-                <div className="p-2 border-t border-motorsport-border shrink-0">
-                  <span className="text-[10px] text-motorsport-muted uppercase tracking-wider">Delta</span>
-                  <div className="mt-1 space-y-1">
-                    {selectedLapData.map((lap, i) => {
-                      if (i === 0) return null;
-                      const refLap = selectedLapData[0];
-                      const refTime = refLap.lapTimeMs || 0;
-                      const lapTime = lap.lapTimeMs || 0;
-                      const delta = lapTime - refTime;
-                      return (
-                        <div key={lap.id} className="flex items-center justify-between text-xs">
-                          <span style={{ color: lap.color }}>Lap {lap.lapNumber}</span>
-                          <span className={`font-telemetry ${delta > 0 ? 'text-motorsport-red' : 'text-motorsport-green'}`}>
-                            {delta >= 0 ? '+' : ''}{(delta / 1000).toFixed(3)}s
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
+            {selectedLapData.length > 1 && (
+              <div className="p-2 border-t border-motorsport-border shrink-0">
+                <span className="text-[10px] text-motorsport-muted uppercase tracking-wider">Delta</span>
+                <div className="mt-1 space-y-1">
+                  {selectedLapData.map((lap, i) => {
+                    if (i === 0) return null;
+                    const refTime = selectedLapData[0].lapTimeMs || 0;
+                    const lapTime = lap.lapTimeMs || 0;
+                    const delta = lapTime - refTime;
+                    return (
+                      <div key={lap.id} className="flex items-center justify-between text-xs">
+                        <span style={{ color: lap.color }}>Lap {lap.lapNumber}</span>
+                        <span className={`font-telemetry ${delta > 0 ? 'text-motorsport-red' : 'text-motorsport-green'}`}>
+                          {delta >= 0 ? '+' : ''}{(delta / 1000).toFixed(3)}s
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
 
           {/* Current Values — dynamic based on visible channels */}
           {currentSample && viewMode === 'graph' && (

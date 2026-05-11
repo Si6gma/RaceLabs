@@ -110,7 +110,7 @@ export default function TrackMapViewer({ laps, currentPoint }: Props) {
 
       // Zoom-reset hint when zoomed in
       if (uScale !== 1 || panX !== 0 || panY !== 0) {
-        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.fillStyle = 'rgba(148,163,184,0.4)';
         ctx.font = '10px monospace';
         ctx.textAlign = 'right';
         ctx.fillText('double-click to reset', W - 8, H - 8);

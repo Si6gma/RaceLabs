@@ -13,7 +13,7 @@ import { normalizeImportedSamples, normalizeLiveFrames, type TelemetryPoint } fr
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 const LAP_COLORS = [
-  '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4',
+  '#60a5fa', '#34d399', '#fbbf24', '#f87171', '#a78bfa', '#22d3ee',
 ];
 
 interface UnifiedLap {
@@ -57,6 +57,7 @@ export default function SessionViewer() {
   const [cursorLocked, setCursorLocked] = useState(false);
   const [hoverIndex, setHoverIndex] = useState(0);
   const hoverIndexRef = useRef(0);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
 
   const [zoomRange, setZoomRange] = useState<[number, number]>([0, 1]);
   const isDragging = useRef(false);
@@ -294,6 +295,11 @@ export default function SessionViewer() {
       const clamped = getSampleIndexFromX(e.clientX);
       hoverIndexRef.current = clamped;
       setHoverIndex(clamped);
+      const container = graphContainerRef.current;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        setHoverPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      }
       return;
     }
 
@@ -328,6 +334,11 @@ export default function SessionViewer() {
       }
     }
     isDragging.current = false;
+  }, [cursorLocked]);
+
+  const handleMouseLeaveGraph = useCallback(() => {
+    isDragging.current = false;
+    if (!cursorLocked) setHoverPos(null);
   }, [cursorLocked]);
 
   const toggleChannel = (key: string) => {
@@ -579,7 +590,7 @@ export default function SessionViewer() {
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
+            onMouseLeave={handleMouseLeaveGraph}
           >
             <TelemetryGraphCanvas
               laps={selectedLapData.map(l => ({ data: l.samples, color: l.color }))}
@@ -588,7 +599,29 @@ export default function SessionViewer() {
               effectiveIndex={effectiveIndex}
               cursorLocked={cursorLocked}
             />
+
+            {/* Floating hover tooltip */}
+            {currentSample && hoverPos && (
+              <HoverTooltip
+                sample={currentSample}
+                visibleChannels={visibleChannels}
+                x={hoverPos.x}
+                y={hoverPos.y}
+                containerRef={graphContainerRef}
+                laps={selectedLapData}
+                effectiveIndex={effectiveIndex}
+              />
+            )}
           </div>
+
+          {/* Zoom range bar — shows when in graph mode and data is loaded */}
+          {viewMode === 'graph' && maxSamples > 1 && (
+            <ZoomRangeBar
+              total={maxSamples - 1}
+              zoomRange={zoomRange}
+              onZoomChange={setZoomRange}
+            />
+          )}
 
           {/* Track view — always mounted, hidden in graph mode */}
           <div className={`flex-1 telemetry-panel min-h-0 relative flex flex-col ${viewMode !== 'track' ? 'hidden' : ''}`}>
@@ -625,28 +658,183 @@ export default function SessionViewer() {
             )}
           </div>
 
-          {/* Current Values — dynamic based on visible channels */}
-          {currentSample && viewMode === 'graph' && (
-            <div className="telemetry-panel p-2 shrink-0">
-              <div className="flex items-center justify-end gap-4 text-xs flex-wrap">
-                {CHANNELS.filter(c => visibleChannels.has(c.key as string)).map(ch => {
-                  const raw = currentSample[ch.key] as number;
-                  const display = ch.transform ? ch.transform(raw) : raw;
-                  return (
-                    <div key={ch.key} className="text-right">
-                      <span className="text-[10px] text-motorsport-muted block">{ch.label}</span>
-                      <span className="font-telemetry" style={{ color: ch.color }}>
-                        {display.toFixed(ch.decimals)}
-                      </span>
-                      <span className="text-[10px] text-motorsport-muted">{ch.unit}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+interface ZoomRangeBarProps {
+  total: number;
+  zoomRange: [number, number];
+  onZoomChange: (r: [number, number]) => void;
+}
+
+function ZoomRangeBar({ total, zoomRange, onZoomChange }: ZoomRangeBarProps) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef<'left' | 'right' | 'mid' | null>(null);
+  const dragStart = useRef({ x: 0, zoomRange: [0, total] as [number, number] });
+
+  const [zStart, zEnd] = zoomRange;
+  const leftPct = (zStart / total) * 100;
+  const rightPct = (zEnd / total) * 100;
+  const isFullRange = zStart === 0 && zEnd === total;
+
+  const getT = (clientX: number) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+    return Math.max(0, Math.min(total, ((clientX - rect.left) / rect.width) * total));
+  };
+
+  const onMouseDown = (e: React.MouseEvent, which: 'left' | 'right' | 'mid') => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragging.current = which;
+    dragStart.current = { x: e.clientX, zoomRange: [...zoomRange] as [number, number] };
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const [ds, de] = dragStart.current.zoomRange;
+      const span = de - ds;
+
+      if (dragging.current === 'left') {
+        const t = getT(ev.clientX);
+        onZoomChange([Math.min(t, de - 20), de]);
+      } else if (dragging.current === 'right') {
+        const t = getT(ev.clientX);
+        onZoomChange([ds, Math.max(t, ds + 20)]);
+      } else {
+        const rect = trackRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const dx = ((ev.clientX - dragStart.current.x) / rect.width) * total;
+        let ns = ds + dx;
+        let ne = de + dx;
+        if (ns < 0) { ns = 0; ne = span; }
+        if (ne > total) { ne = total; ns = total - span; }
+        onZoomChange([ns, ne]);
+      }
+    };
+    const onUp = () => {
+      dragging.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const handleTrackClick = (e: React.MouseEvent) => {
+    if (dragging.current) return;
+    const t = getT(e.clientX);
+    const span = zEnd - zStart;
+    let ns = t - span / 2;
+    let ne = t + span / 2;
+    if (ns < 0) { ns = 0; ne = span; }
+    if (ne > total) { ne = total; ns = total - span; }
+    onZoomChange([ns, ne]);
+  };
+
+  return (
+    <div className="shrink-0 px-1 py-1.5">
+      <div
+        ref={trackRef}
+        className="relative h-3 rounded-full bg-motorsport-surface cursor-pointer select-none"
+        onClick={handleTrackClick}
+      >
+        {/* Filled region */}
+        <div
+          className={`absolute inset-y-0 rounded-full ${isFullRange ? 'bg-motorsport-border' : 'bg-motorsport-blue/40'}`}
+          style={{ left: `${leftPct}%`, right: `${100 - rightPct}%` }}
+          onMouseDown={isFullRange ? undefined : (e) => onMouseDown(e, 'mid')}
+          onClick={(e) => e.stopPropagation()}
+        />
+        {/* Left handle */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-motorsport-blue border-2 border-motorsport-charcoal cursor-ew-resize shadow-sm"
+          style={{ left: `calc(${leftPct}% - 6px)` }}
+          onMouseDown={(e) => onMouseDown(e, 'left')}
+          onClick={(e) => e.stopPropagation()}
+        />
+        {/* Right handle */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-motorsport-blue border-2 border-motorsport-charcoal cursor-ew-resize shadow-sm"
+          style={{ left: `calc(${rightPct}% - 6px)` }}
+          onMouseDown={(e) => onMouseDown(e, 'right')}
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface HoverTooltipProps {
+  sample: TelemetryPoint;
+  visibleChannels: Set<string>;
+  x: number;
+  y: number;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  laps: UnifiedLap[];
+  effectiveIndex: number;
+}
+
+function HoverTooltip({ sample, visibleChannels, x, y, containerRef, laps, effectiveIndex }: HoverTooltipProps) {
+  const TOOLTIP_W = 160;
+  const TOOLTIP_H_EST = 200;
+  const OFFSET = 14;
+
+  const container = containerRef.current;
+  const cw = container?.clientWidth ?? 600;
+  const ch = container?.clientHeight ?? 400;
+
+  const left = x + OFFSET + TOOLTIP_W > cw ? x - OFFSET - TOOLTIP_W : x + OFFSET;
+  const top = Math.max(8, Math.min(ch - TOOLTIP_H_EST - 8, y - TOOLTIP_H_EST / 2));
+
+  const dist = sample.cumulative_distance ?? 0;
+  const distLabel = dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${Math.round(dist)} m`;
+
+  return (
+    <div
+      className="absolute pointer-events-none z-20 rounded border border-motorsport-border bg-motorsport-charcoal/95 backdrop-blur-sm shadow-panel-lg px-3 py-2.5 min-w-[140px]"
+      style={{ left, top }}
+    >
+      <div className="text-[10px] text-motorsport-muted mb-2 border-b border-motorsport-border pb-1.5 flex items-center justify-between">
+        <span className="font-telemetry">{distLabel}</span>
+        {laps.length > 1 && (
+          <span className="text-[9px] text-motorsport-dim">#{effectiveIndex}</span>
+        )}
+      </div>
+      <div className="space-y-1.5">
+        {CHANNELS.filter(c => visibleChannels.has(c.key as string)).map(ch => {
+          const raw = sample[ch.key] as number;
+          const display = ch.transform ? ch.transform(raw) : raw;
+          return (
+            <div key={ch.key} className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: ch.color }} />
+                <span className="text-[10px] text-motorsport-muted">{ch.label}</span>
+              </div>
+              <span className="font-telemetry text-[11px] tabular-nums" style={{ color: ch.color }}>
+                {display.toFixed(ch.decimals)}{ch.unit}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {laps.length > 1 && (
+        <div className="mt-2 pt-1.5 border-t border-motorsport-border space-y-1">
+          {laps.map((lap) => {
+            const s = lap.samples[effectiveIndex];
+            if (!s) return null;
+            const spd = s.speed_kmh ?? 0;
+            return (
+              <div key={lap.id} className="flex items-center justify-between gap-2 text-[10px]">
+                <span style={{ color: lap.color }}>L{lap.lapNumber}</span>
+                <span className="font-telemetry text-motorsport-muted">{spd.toFixed(0)} km/h</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

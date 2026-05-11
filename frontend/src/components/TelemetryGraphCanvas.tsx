@@ -15,14 +15,14 @@ export interface ChannelDef {
 }
 
 export const CHANNELS: ChannelDef[] = [
-  { key: 'speed_kmh', label: 'Speed', color: '#3b82f6', min: 0, max: 350, scale: 1.0, offset: 0, unit: ' km/h', decimals: 0 },
-  { key: 'rpm', label: 'RPM', color: '#a855f7', min: 0, max: 15000, scale: 1.0, offset: 0, unit: '', decimals: 0 },
-  { key: 'throttle', label: 'Throttle', color: '#22c55e', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
-  { key: 'brake', label: 'Brake', color: '#ef4444', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
-  { key: 'steering', label: 'Steering', color: '#06b6d4', min: -1, max: 1, scale: 0.35, offset: 0.325, unit: '%', transform: v => v * 100, decimals: 0 },
-  { key: 'gear', label: 'Gear', color: '#f59e0b', min: 0, max: 8, scale: 0.18, offset: 0.8, unit: '', decimals: 0 },
-  { key: 'gforce_lat', label: 'G-Force', color: '#ec4899', min: 0, max: 6, scale: 0.22, offset: 0, unit: 'G', decimals: 2 },
-  { key: 'delta_time', label: 'Delta', color: '#ffffff', min: -5, max: 5, scale: 0.3, offset: 0.35, unit: 's', decimals: 3 },
+  { key: 'speed_kmh', label: 'Speed', color: '#60a5fa', min: 0, max: 350, scale: 1.0, offset: 0, unit: ' km/h', decimals: 0 },
+  { key: 'rpm', label: 'RPM', color: '#c084fc', min: 0, max: 15000, scale: 1.0, offset: 0, unit: '', decimals: 0 },
+  { key: 'throttle', label: 'Throttle', color: '#4ade80', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
+  { key: 'brake', label: 'Brake', color: '#f87171', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
+  { key: 'steering', label: 'Steering', color: '#22d3ee', min: -1, max: 1, scale: 0.35, offset: 0.325, unit: '%', transform: v => v * 100, decimals: 0 },
+  { key: 'gear', label: 'Gear', color: '#fb923c', min: 0, max: 8, scale: 0.18, offset: 0.8, unit: '', decimals: 0 },
+  { key: 'gforce_lat', label: 'G-Force', color: '#e879f9', min: 0, max: 6, scale: 0.22, offset: 0, unit: 'G', decimals: 2 },
+  { key: 'delta_time', label: 'Delta', color: '#94a3b8', min: -5, max: 5, scale: 0.3, offset: 0.35, unit: 's', decimals: 3 },
 ];
 
 export const DEFAULT_VISIBLE = new Set(['speed_kmh', 'throttle', 'brake']);
@@ -79,7 +79,7 @@ export default function TelemetryGraphCanvas({
       const zoomSamples = Math.max(1, zEnd - zStart);
 
       // Grid lines
-      ctx.strokeStyle = '#333';
+      ctx.strokeStyle = '#1e293b';
       ctx.lineWidth = 0.5;
       for (let i = 0; i <= 5; i++) {
         const y = PAD.top + (graphHeight / 5) * i;
@@ -126,7 +126,7 @@ export default function TelemetryGraphCanvas({
       // X-axis distance labels — use the longest lap so the axis matches the zoom range
       const refLap = laps.reduce((best, l) => l.data.length > best.data.length ? l : best, laps[0]);
       if (refLap && refLap.data.length > 0) {
-        ctx.fillStyle = '#555';
+        ctx.fillStyle = '#475569';
         ctx.font = '9px monospace';
         ctx.textAlign = 'center';
         const numTicks = 6;
@@ -142,21 +142,8 @@ export default function TelemetryGraphCanvas({
         }
       }
 
-      // Zoom indicator bar
-      const totalSamples = laps[0]?.data.length ?? 1;
-      if (zoomSamples < totalSamples) {
-        const total = totalSamples - 1;
-        const barY = height - 6;
-        ctx.fillStyle = '#222';
-        ctx.fillRect(PAD.left, barY, graphWidth, 4);
-        ctx.fillStyle = '#3b82f6';
-        const rs = zStart / total;
-        const re = zEnd / total;
-        ctx.fillRect(PAD.left + rs * graphWidth, barY, (re - rs) * graphWidth, 4);
-      }
-
       // Y-axis labels (Speed scale)
-      ctx.fillStyle = '#888';
+      ctx.fillStyle = '#64748b';
       ctx.font = '10px monospace';
       ctx.textAlign = 'right';
       ctx.fillText('350', PAD.left - 5, PAD.top + 5);

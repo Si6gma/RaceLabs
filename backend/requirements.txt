@@ -6,8 +6,7 @@ sqlalchemy[asyncio]==2.0.27
 alembic==1.13.1
 pydantic==2.6.1
 pydantic-settings==2.1.0
-influxdb-client==1.40.0
-redis==5.0.1
+msgpack==1.0.8
 numpy==1.26.3
 structlog==24.1.0
 python-multipart==0.0.9

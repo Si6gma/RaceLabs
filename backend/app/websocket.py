@@ -3,9 +3,9 @@ WebSocket telemetry broadcaster
 Manages client connections and streams telemetry data
 """
 import asyncio
-import json
 import logging
 from typing import Set, Dict, Any, Optional
+import msgpack
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
@@ -46,13 +46,13 @@ class ConnectionManager:
                 self.subscriptions[channel].discard(websocket)
 
     async def broadcast(self, message: Dict[str, Any], channel: Optional[str] = None):
-        data = json.dumps(message, default=str)
+        data = msgpack.packb(message, default=str, use_bin_type=True)
         targets = self.subscriptions.get(channel, self.active_connections) if channel else self.active_connections
-        
+
         disconnected = set()
         for connection in list(targets):
             try:
-                await connection.send_text(data)
+                await connection.send_bytes(data)
             except Exception:
                 disconnected.add(connection)
         

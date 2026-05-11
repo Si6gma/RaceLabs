@@ -23,24 +23,17 @@ services:
       - "20777:20777/udp"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/telemetry
-      - INFLUXDB_URL=http://influxdb:8086
-      - INFLUXDB_TOKEN=telemetry-token
-      - INFLUXDB_ORG=motorsport
-      - INFLUXDB_BUCKET=telemetry
       - UDP_PORT=20777
       - WS_PORT=8000
-      - REDIS_URL=redis://redis:6379
     depends_on:
       - postgres
-      - influxdb
-      - redis
     networks:
       - telemetry-net
     volumes:
       - ./backend/app:/app/app
 
   postgres:
-    image: postgres:16-alpine
+    image: timescale/timescaledb:latest-pg16
     container_name: tel_postgres
     restart: unless-stopped
     environment:
@@ -52,34 +45,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d
-    networks:
-      - telemetry-net
-
-  influxdb:
-    image: influxdb:2.7
-    container_name: tel_influxdb
-    restart: unless-stopped
-    environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
-      - DOCKER_INFLUXDB_INIT_ORG=motorsport
-      - DOCKER_INFLUXDB_INIT_BUCKET=telemetry
-      - DOCKER_INFLUXDB_INIT_RETENTION=30d
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=telemetry-token
-    ports:
-      - "8086:8086"
-    volumes:
-      - influxdb_data:/var/lib/influxdb2
-    networks:
-      - telemetry-net
-
-  redis:
-    image: redis:7-alpine
-    container_name: tel_redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
     networks:
       - telemetry-net
 
@@ -99,7 +64,6 @@ services:
 
 volumes:
   postgres_data:
-  influxdb_data:
 
 networks:
   telemetry-net:

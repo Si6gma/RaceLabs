@@ -102,26 +102,26 @@ export default function SessionViewer() {
     const loadImported = async (data: ImportedSession & { laps: ImportedLap[] }) => {
       setSelectedImportedSession(data);
 
-      const lapData: UnifiedLap[] = [];
-      for (let i = 0; i < data.laps.length; i++) {
-        const lap = data.laps[i];
-        const telemRes = await fetch(`${API_URL}/api/import/laps/${lap.id}/telemetry`);
-        let samples: TelemetrySample[] = [];
-        if (telemRes.ok) {
-          const telem = await telemRes.json();
-          samples = telem.samples;
-        }
-        lapData.push({
-          id: lap.id,
-          lapNumber: lap.lap_number,
-          lapTimeMs: lap.lap_time_ms,
-          valid: lap.valid,
-          maxSpeed: lap.max_speed,
-          sampleCount: samples.length,
-          samples: normalizeImportedSamples(samples),
-          color: LAP_COLORS[i % LAP_COLORS.length],
-        });
-      }
+      const lapData = await Promise.all(
+        data.laps.map(async (lap, i) => {
+          const telemRes = await fetch(`${API_URL}/api/import/laps/${lap.id}/telemetry`);
+          let samples: TelemetrySample[] = [];
+          if (telemRes.ok) {
+            const telem = await telemRes.json();
+            samples = telem.samples;
+          }
+          return {
+            id: lap.id,
+            lapNumber: lap.lap_number,
+            lapTimeMs: lap.lap_time_ms,
+            valid: lap.valid,
+            maxSpeed: lap.max_speed,
+            sampleCount: samples.length,
+            samples: normalizeImportedSamples(samples),
+            color: LAP_COLORS[i % LAP_COLORS.length],
+          };
+        })
+      );
 
       setSession({
         id: data.id,
@@ -345,22 +345,22 @@ export default function SessionViewer() {
   return (
     <div className="h-full flex flex-col p-3 gap-3 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between telemetry-panel p-2 shrink-0">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/sessions')}
-            className="p-1.5 hover:bg-motorsport-surface rounded-sm transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4 text-motorsport-muted" />
-          </button>
-          <div>
-            <h1 className="text-sm font-semibold">{session.name}</h1>
-            <p className="text-xs text-motorsport-muted">
-              {session.track} · {session.lapCount} laps · {session.sampleCount.toLocaleString()} samples
-            </p>
+      <div className="telemetry-panel shrink-0 overflow-hidden">
+        <div className="panel-header justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/sessions')}
+              className="icon-btn"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div>
+              <h1 className="text-[13px] font-semibold text-motorsport-text">{session.name}</h1>
+              <p className="text-[11px] text-motorsport-muted mt-0.5">
+                {session.track} · {session.lapCount} lap{session.lapCount !== 1 ? 's' : ''} · {session.sampleCount.toLocaleString()} samples
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
           {session.source === 'imported' && (
             <button
               onClick={async () => {
@@ -374,7 +374,7 @@ export default function SessionViewer() {
                   a.click();
                 }
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-surface rounded-sm text-xs hover:bg-motorsport-surface/80 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-surface border border-motorsport-border rounded text-[11px] hover:bg-motorsport-surface-2 transition-colors"
             >
               <Download className="w-3 h-3" />
               Export
@@ -385,14 +385,12 @@ export default function SessionViewer() {
 
       <div className="flex-1 flex gap-3 min-h-0">
         {/* Left Panel - Lap Selector */}
-        <div className="w-56 telemetry-panel flex flex-col shrink-0">
-          <div className="p-2 border-b border-motorsport-border">
-            <div className="flex items-center gap-2">
-              <Layers className="w-3.5 h-3.5 text-motorsport-orange" />
-              <span className="text-xs font-semibold">LAPS</span>
-            </div>
+        <div className="w-52 telemetry-panel flex flex-col shrink-0 overflow-hidden">
+          <div className="panel-header">
+            <Layers className="w-3.5 h-3.5 text-motorsport-orange" />
+            <span className="text-[10px] font-semibold tracking-widest uppercase text-motorsport-text">Laps</span>
           </div>
-          <div className="flex-1 overflow-auto p-2 space-y-1">
+          <div className="flex-1 overflow-auto p-1.5 space-y-1">
             {laps.map((lapData, idx) => (
               <button
                 key={lapData.id}
@@ -407,31 +405,36 @@ export default function SessionViewer() {
                   hoverIndexRef.current = 0;
                   setCursorLocked(false);
                 }}
-                className={`w-full text-left p-2 rounded-sm text-xs transition-colors ${
+                className={`w-full text-left px-2.5 py-2 rounded text-xs transition-all ${
                   selectedLaps.has(idx)
-                    ? 'bg-motorsport-orange/10 border border-motorsport-orange/30'
-                    : 'hover:bg-motorsport-surface/50 border border-transparent'
+                    ? 'bg-motorsport-surface border border-motorsport-border-strong'
+                    : 'hover:bg-motorsport-surface/40 border border-transparent'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium" style={{ color: lapData.color }}>
-                    Lap {lapData.lapNumber}
-                  </span>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: lapData.color }}
+                    />
+                    <span className="font-semibold text-[12px] text-motorsport-text">
+                      Lap {lapData.lapNumber}
+                    </span>
+                  </div>
                   {lapData.valid ? (
-                    <span className="text-[9px] text-motorsport-green">VALID</span>
+                    <span className="text-[9px] text-motorsport-green font-medium tracking-wider">VALID</span>
                   ) : (
-                    <span className="text-[9px] text-motorsport-red">INVALID</span>
+                    <span className="text-[9px] text-motorsport-red font-medium tracking-wider">INVALID</span>
                   )}
                 </div>
-                <div className="flex items-center justify-between text-motorsport-muted">
-                  <span>{lapData.lapTimeMs ? formatLapTime(lapData.lapTimeMs) : '--:--'}</span>
-                  <span>{lapData.sampleCount} pts</span>
-                </div>
-                <div className="flex items-center gap-2 mt-1 text-[10px] text-motorsport-dim">
-                  <span>Max: {lapData.maxSpeed.toFixed(0)} km/h</span>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-telemetry text-motorsport-text">
+                    {lapData.lapTimeMs ? formatLapTime(lapData.lapTimeMs) : '—:——'}
+                  </span>
+                  <span className="text-motorsport-dim">{lapData.sampleCount} pts</span>
                 </div>
                 {lapData.primaryPhase && (
-                  <div className="text-[10px] text-motorsport-dim capitalize">
+                  <div className="text-[10px] text-motorsport-dim capitalize mt-1">
                     {lapData.primaryPhase.replace('_', ' ')}
                   </div>
                 )}
@@ -443,7 +446,7 @@ export default function SessionViewer() {
         {/* Center - Main View */}
         <div className="flex-1 flex flex-col gap-3 min-w-0">
           {/* Controls bar */}
-          <div className="flex items-center gap-2 telemetry-panel p-2 shrink-0">
+          <div className="flex items-center gap-2 telemetry-panel shrink-0 px-2 py-1.5">
             {/* View toggle */}
             <div className="flex items-center gap-1 mr-2 border-r border-motorsport-border pr-2">
               <button
@@ -577,22 +580,15 @@ export default function SessionViewer() {
             </div>
           ) : (
             <div className="flex-1 telemetry-panel min-h-0 relative flex flex-col">
-              <div className="p-2 border-b border-motorsport-border shrink-0">
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-3.5 h-3.5 text-motorsport-orange" />
-                  <span className="text-xs font-semibold">TRACK MAP</span>
-                </div>
+              <div className="panel-header shrink-0">
+                <MapPin className="w-3.5 h-3.5 text-motorsport-orange" />
+                <span className="text-[10px] font-semibold tracking-widest uppercase text-motorsport-text">Track Map</span>
               </div>
               <div className="flex-1 p-2 min-h-0">
-                {selectedLapData.map((lap, i) => (
-                  <div key={lap.id} className="w-full h-full">
-                    <TrackMapViewer
-                      data={lap.samples}
-                      color={lap.color}
-                      currentPoint={i === (currentLapIndex % selectedLapData.length) ? currentSample : undefined}
-                    />
-                  </div>
-                ))}
+                <TrackMapViewer
+                  laps={selectedLapData.map(lap => ({ data: lap.samples, color: lap.color }))}
+                  currentPoint={currentSample}
+                />
               </div>
               {selectedLapData.length > 1 && (
                 <div className="p-2 border-t border-motorsport-border shrink-0">

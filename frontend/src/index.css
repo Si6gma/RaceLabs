@@ -6,54 +6,115 @@
   html {
     @apply bg-motorsport-black text-motorsport-text;
     font-family: 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-  
+
   ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
   }
-  
+
   ::-webkit-scrollbar-track {
-    @apply bg-motorsport-charcoal;
+    background: transparent;
   }
-  
+
   ::-webkit-scrollbar-thumb {
-    @apply bg-motorsport-dim rounded-sm;
+    @apply bg-motorsport-dim rounded-full;
   }
-  
+
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-motorsport-muted;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  * {
+    border-color: theme('colors.motorsport.border');
   }
 }
 
 @layer components {
   .telemetry-panel {
-    @apply bg-motorsport-panel border border-motorsport-border rounded-sm;
+    @apply bg-motorsport-panel border border-motorsport-border rounded shadow-panel;
   }
-  
+
+  .panel-header {
+    @apply px-3 py-2 border-b border-motorsport-border flex items-center gap-2 bg-motorsport-dark;
+  }
+
+  .panel-section {
+    @apply px-3 py-2 border-b border-motorsport-border/60;
+  }
+
   .telemetry-value {
     @apply font-telemetry text-sm tabular-nums;
   }
-  
+
   .telemetry-label {
-    @apply text-xs text-motorsport-muted uppercase tracking-wider;
+    @apply text-[10px] text-motorsport-muted uppercase tracking-widest font-medium;
   }
-  
+
   .gauge-bar {
-    @apply h-1.5 bg-motorsport-charcoal rounded-sm overflow-hidden;
+    @apply h-1.5 bg-motorsport-charcoal rounded-full overflow-hidden;
   }
-  
+
   .gauge-fill {
     @apply h-full transition-all duration-75 ease-out;
+  }
+
+  /* Status badge variants */
+  .badge-live {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border
+           bg-motorsport-green/10 text-motorsport-green border-motorsport-green/30;
+  }
+
+  .badge-saved {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border
+           bg-motorsport-muted/10 text-motorsport-muted border-motorsport-border;
+  }
+
+  .badge-csv {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border
+           bg-motorsport-blue/10 text-motorsport-blue border-motorsport-blue/30;
+  }
+
+  /* Clickable table row */
+  .table-row-interactive {
+    @apply border-b border-motorsport-border/40 hover:bg-motorsport-surface/40 cursor-pointer transition-colors;
+  }
+
+  /* Input / Select base */
+  .field {
+    @apply bg-motorsport-dark border border-motorsport-border rounded px-3 py-1.5 text-xs
+           text-motorsport-text placeholder-motorsport-dim
+           focus:outline-none focus:border-motorsport-orange/60 focus:ring-1 focus:ring-motorsport-orange/20
+           transition-colors;
+  }
+
+  /* Icon button */
+  .icon-btn {
+    @apply p-1.5 rounded hover:bg-motorsport-surface transition-colors text-motorsport-muted hover:text-motorsport-text;
   }
 }
 
 @layer utilities {
   .text-glow-orange {
-    text-shadow: 0 0 10px rgba(255, 107, 0, 0.4);
+    text-shadow: 0 0 12px rgba(255, 102, 0, 0.5);
   }
-  
+
   .text-glow-cyan {
-    text-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+    text-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
+  }
+
+  .text-glow-green {
+    text-shadow: 0 0 10px rgba(0, 230, 118, 0.4);
+  }
+
+  .border-glow-orange {
+    box-shadow: 0 0 0 1px rgba(255, 102, 0, 0.3);
   }
 }

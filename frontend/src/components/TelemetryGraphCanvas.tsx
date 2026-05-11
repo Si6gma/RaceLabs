@@ -27,6 +27,8 @@ export const CHANNELS: ChannelDef[] = [
 
 export const DEFAULT_VISIBLE = new Set(['speed_kmh', 'throttle', 'brake']);
 
+const PAD = { top: 20, right: 60, bottom: 40, left: 50 };
+
 interface LapData {
   data: TelemetryPoint[];
   color: string;
@@ -47,131 +49,186 @@ export default function TelemetryGraphCanvas({
   effectiveIndex,
   cursorLocked,
 }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dataCanvasRef = useRef<HTMLCanvasElement>(null);
+  const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Data layer — traces, grid, labels, zoom bar, x-axis distance ticks
   useEffect(() => {
-    const canvas = canvasRef.current;
+    const canvas = dataCanvasRef.current;
     if (!canvas || laps.length === 0) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    function draw() {
+      const ctx = canvas!.getContext('2d');
+      if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas!.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      canvas!.width = rect.width * dpr;
+      canvas!.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
 
-    const width = rect.width;
-    const height = rect.height;
-    const padding = { top: 20, right: 60, bottom: 30, left: 50 };
-    const graphWidth = width - padding.left - padding.right;
-    const graphHeight = height - padding.top - padding.bottom;
+      const width = rect.width;
+      const height = rect.height;
+      const graphWidth = width - PAD.left - PAD.right;
+      const graphHeight = height - PAD.top - PAD.bottom;
 
-    ctx.clearRect(0, 0, width, height);
+      ctx.clearRect(0, 0, width, height);
 
-    const [zStart, zEnd] = zoomRange;
-    const zoomSamples = Math.max(1, zEnd - zStart);
+      const [zStart, zEnd] = zoomRange;
+      const zoomSamples = Math.max(1, zEnd - zStart);
 
-    // Grid
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 5; i++) {
-      const y = padding.top + (graphHeight / 5) * i;
-      ctx.beginPath();
-      ctx.moveTo(padding.left, y);
-      ctx.lineTo(width - padding.right, y);
-      ctx.stroke();
-    }
-
-    // Draw each visible channel for each lap
-    CHANNELS.forEach(ch => {
-      if (!visibleChannels.has(ch.key as string)) return;
-
-      laps.forEach((lap) => {
-        const samples = lap.data;
-        if (samples.length < 2) return;
-
-        const xScale = graphWidth / zoomSamples;
-        const startI = Math.max(0, Math.floor(zStart));
-        const endI = Math.min(samples.length - 1, Math.ceil(zEnd));
-
-        ctx.strokeStyle = ch.color;
-        ctx.lineWidth = ch.key === 'speed_kmh' || ch.key === 'rpm' ? 1.5 : 1;
-        if (ch.key === 'throttle' || ch.key === 'brake') ctx.globalAlpha = 0.35;
-        else if (ch.key === 'delta_time') ctx.globalAlpha = 0.6;
-        else ctx.globalAlpha = 0.9;
-
+      // Grid lines
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i <= 5; i++) {
+        const y = PAD.top + (graphHeight / 5) * i;
         ctx.beginPath();
-        let first = true;
-        for (let i = startI; i <= endI; i++) {
-          const s = samples[i];
-          const val = s[ch.key] as number;
-          const x = padding.left + (i - zStart) * xScale;
-          const normalized = (val - ch.min) / (ch.max - ch.min);
-          const y = padding.top + graphHeight * ch.offset + graphHeight * ch.scale * (1 - normalized);
-          if (first) { ctx.moveTo(x, y); first = false; }
-          else ctx.lineTo(x, y);
-        }
+        ctx.moveTo(PAD.left, y);
+        ctx.lineTo(width - PAD.right, y);
         ctx.stroke();
-        ctx.globalAlpha = 1;
+      }
+
+      // Channel traces
+      CHANNELS.forEach(ch => {
+        if (!visibleChannels.has(ch.key as string)) return;
+        laps.forEach(lap => {
+          const samples = lap.data;
+          if (samples.length < 2) return;
+
+          const xScale = graphWidth / zoomSamples;
+          const startI = Math.max(0, Math.floor(zStart));
+          const endI = Math.min(samples.length - 1, Math.ceil(zEnd));
+
+          ctx.strokeStyle = ch.color;
+          ctx.lineWidth = ch.key === 'speed_kmh' || ch.key === 'rpm' ? 1.5 : 1;
+          ctx.globalAlpha =
+            ch.key === 'throttle' || ch.key === 'brake' ? 0.35
+            : ch.key === 'delta_time' ? 0.6
+            : 0.9;
+
+          ctx.beginPath();
+          let first = true;
+          for (let i = startI; i <= endI; i++) {
+            const s = samples[i];
+            const val = s[ch.key] as number;
+            const x = PAD.left + (i - zStart) * xScale;
+            const normalized = (val - ch.min) / (ch.max - ch.min);
+            const y = PAD.top + graphHeight * ch.offset + graphHeight * ch.scale * (1 - normalized);
+            if (first) { ctx.moveTo(x, y); first = false; }
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        });
       });
-    });
 
-    // Cursor line at effectiveIndex
-    if (effectiveIndex >= zStart && effectiveIndex <= zEnd) {
-      const xScale = graphWidth / zoomSamples;
-      const x = padding.left + (effectiveIndex - zStart) * xScale;
+      // X-axis distance labels
+      const firstLap = laps[0];
+      if (firstLap && firstLap.data.length > 0) {
+        ctx.fillStyle = '#555';
+        ctx.font = '9px monospace';
+        ctx.textAlign = 'center';
+        const numTicks = 6;
+        for (let t = 0; t <= numTicks; t++) {
+          const idx = Math.max(0, Math.min(
+            firstLap.data.length - 1,
+            Math.floor(zStart + (t / numTicks) * zoomSamples)
+          ));
+          const dist = firstLap.data[idx]?.cumulative_distance ?? 0;
+          const x = PAD.left + (t / numTicks) * graphWidth;
+          const label = dist >= 1000 ? `${(dist / 1000).toFixed(2)}km` : `${Math.round(dist)}m`;
+          ctx.fillText(label, x, PAD.top + graphHeight + 16);
+        }
+      }
 
-      ctx.strokeStyle = cursorLocked ? '#fff' : 'rgba(255,255,255,0.5)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash(cursorLocked ? [4, 4] : [2, 6]);
-      ctx.beginPath();
-      ctx.moveTo(x, padding.top);
-      ctx.lineTo(x, height - padding.bottom);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      // Zoom indicator bar
+      const totalSamples = laps[0]?.data.length ?? 1;
+      if (zoomSamples < totalSamples) {
+        const total = totalSamples - 1;
+        const barY = height - 6;
+        ctx.fillStyle = '#222';
+        ctx.fillRect(PAD.left, barY, graphWidth, 4);
+        ctx.fillStyle = '#3b82f6';
+        const rs = zStart / total;
+        const re = zEnd / total;
+        ctx.fillRect(PAD.left + rs * graphWidth, barY, (re - rs) * graphWidth, 4);
+      }
+
+      // Y-axis labels (Speed scale)
+      ctx.fillStyle = '#888';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText('350', PAD.left - 5, PAD.top + 5);
+      ctx.fillText('175', PAD.left - 5, PAD.top + graphHeight / 2 + 5);
+      ctx.fillText('0', PAD.left - 5, PAD.top + graphHeight - 5);
+
+      // Right-side channel legend
+      ctx.textAlign = 'left';
+      let labelY = PAD.top + 10;
+      CHANNELS.forEach(ch => {
+        if (!visibleChannels.has(ch.key as string)) return;
+        ctx.fillStyle = ch.color;
+        ctx.font = '9px monospace';
+        ctx.fillText(ch.label, width - PAD.right + 6, labelY);
+        labelY += 12;
+      });
     }
 
-    // Zoom window indicator (mini bar at bottom)
-    const totalSamples = laps[0]?.data.length ?? 1;
-    if (zoomSamples < totalSamples) {
-      const total = totalSamples - 1;
-      const barY = height - 6;
-      const barW = graphWidth;
-      const barX = padding.left;
-      ctx.fillStyle = '#222';
-      ctx.fillRect(barX, barY, barW, 4);
-      ctx.fillStyle = '#3b82f6';
-      const rs = zStart / total;
-      const re = zEnd / total;
-      ctx.fillRect(barX + rs * barW, barY, (re - rs) * barW, 4);
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [laps, visibleChannels, zoomRange]);
+
+  // Cursor overlay — just the vertical line, redraws on every hover
+  useEffect(() => {
+    const canvas = cursorCanvasRef.current;
+    if (!canvas) return;
+
+    function draw() {
+      const ctx = canvas!.getContext('2d');
+      if (!ctx) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas!.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      canvas!.width = rect.width * dpr;
+      canvas!.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
+
+      const width = rect.width;
+      const height = rect.height;
+      const graphWidth = width - PAD.left - PAD.right;
+
+      ctx.clearRect(0, 0, width, height);
+
+      const [zStart, zEnd] = zoomRange;
+      const zoomSamples = Math.max(1, zEnd - zStart);
+
+      if (effectiveIndex >= zStart && effectiveIndex <= zEnd) {
+        const x = PAD.left + (effectiveIndex - zStart) * (graphWidth / zoomSamples);
+        ctx.strokeStyle = cursorLocked ? '#fff' : 'rgba(255,255,255,0.5)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash(cursorLocked ? [4, 4] : [2, 6]);
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top);
+        ctx.lineTo(x, height - PAD.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
 
-    // Y-axis labels (Speed primary)
-    ctx.fillStyle = '#888';
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText('350', padding.left - 5, padding.top + 5);
-    ctx.fillText('175', padding.left - 5, padding.top + graphHeight / 2 + 5);
-    ctx.fillText('0', padding.left - 5, padding.top + graphHeight - 5);
-
-    // Right-side channel labels
-    ctx.textAlign = 'left';
-    let labelY = padding.top + 10;
-    CHANNELS.forEach(ch => {
-      if (!visibleChannels.has(ch.key as string)) return;
-      ctx.fillStyle = ch.color;
-      ctx.font = '9px monospace';
-      ctx.fillText(ch.label, width - padding.right + 6, labelY);
-      labelY += 12;
-    });
-  }, [laps, visibleChannels, effectiveIndex, cursorLocked, zoomRange]);
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [effectiveIndex, cursorLocked, zoomRange]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="w-full h-full block"
-    />
+    <div className="relative w-full h-full">
+      <canvas ref={dataCanvasRef} className="absolute inset-0 w-full h-full block" />
+      <canvas ref={cursorCanvasRef} className="absolute inset-0 w-full h-full block pointer-events-none" />
+    </div>
   );
 }

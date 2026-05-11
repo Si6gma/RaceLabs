@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
-import { Table, Download, Trash2, Calendar, Flag, Upload, Search, Filter, FileSpreadsheet, Eye, Play } from 'lucide-react';
+import { Table, Download, Trash2, Calendar, Flag, Upload, Search, Filter, FileSpreadsheet, Eye, Play, AlertTriangle } from 'lucide-react';
 import { formatTime } from '@/utils/formatters';
 import ImportModal from '@/components/ImportModal';
 import { useNavigate } from 'react-router-dom';
@@ -14,6 +14,8 @@ export default function SessionTable() {
   const [loading, setLoading] = useState(false);
   const [trackFilter, setTrackFilter] = useState('');
   const [sessions, setSessions] = useState<any[]>([]);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
 
   // Fetch imported sessions
@@ -121,7 +123,16 @@ export default function SessionTable() {
 
   const handleDelete = useCallback(async (id: string, source: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm('Delete this session?')) return;
+
+    if (confirmDelete !== id) {
+      setConfirmDelete(id);
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+      confirmTimer.current = setTimeout(() => setConfirmDelete(null), 2500);
+      return;
+    }
+
+    setConfirmDelete(null);
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
 
     try {
       if (source === 'local') {
@@ -131,9 +142,7 @@ export default function SessionTable() {
           if (selectedSession === id) setSelectedSession(null);
         }
       } else if (source === 'csv') {
-        const res = await fetch(`${API_URL}/api/import/sessions/${id}`, {
-          method: 'DELETE',
-        });
+        const res = await fetch(`${API_URL}/api/import/sessions/${id}`, { method: 'DELETE' });
         if (res.ok) {
           removeImportedSession(id);
           if (selectedSession === id) setSelectedSession(null);
@@ -142,7 +151,7 @@ export default function SessionTable() {
     } catch (err) {
       console.error('Delete failed:', err);
     }
-  }, [removeImportedSession, selectedSession]);
+  }, [confirmDelete, removeImportedSession, selectedSession]);
 
   const handleExport = useCallback(async (id: string, source: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -194,47 +203,44 @@ export default function SessionTable() {
       <ImportModal />
 
       {/* Header */}
-      <div className="flex items-center justify-between telemetry-panel p-2 shrink-0">
-        <div className="flex items-center gap-2">
-          <Table className="w-4 h-4 text-motorsport-orange" />
-          <span className="text-sm font-semibold">SESSION LIBRARY</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Track Filter */}
-          <div className="relative">
-            <Filter className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-motorsport-muted" />
-            <select
-              value={trackFilter}
-              onChange={(e) => setTrackFilter(e.target.value)}
-              className="bg-motorsport-charcoal border border-motorsport-border rounded-sm pl-7 pr-3 py-1.5 text-xs text-motorsport-text focus:outline-none focus:border-motorsport-orange appearance-none cursor-pointer"
+      <div className="telemetry-panel shrink-0 overflow-hidden">
+        <div className="panel-header justify-between">
+          <div className="flex items-center gap-2">
+            <Table className="w-3.5 h-3.5 text-motorsport-orange" />
+            <span className="text-[11px] font-semibold tracking-widest uppercase text-motorsport-text">Session Library</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Filter className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-motorsport-dim pointer-events-none" />
+              <select
+                value={trackFilter}
+                onChange={(e) => setTrackFilter(e.target.value)}
+                className="field pl-7 pr-3 appearance-none cursor-pointer"
+              >
+                <option value="">All Tracks</option>
+                {tracks.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div className="relative">
+              <Search className="w-3 h-3 absolute left-2.5 top-1/2 -translate-y-1/2 text-motorsport-dim pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search sessions…"
+                value={filter}
+                onChange={e => setFilter(e.target.value)}
+                className="field pl-7 w-44"
+              />
+            </div>
+            <button
+              onClick={() => setImportModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-orange text-black rounded text-[11px] font-semibold hover:bg-motorsport-orange/90 active:scale-95 transition-all"
             >
-              <option value="">All Tracks</option>
-              {tracks.map(t => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
+              <Upload className="w-3 h-3" />
+              Import
+            </button>
           </div>
-
-          {/* Search */}
-          <div className="relative">
-            <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-motorsport-muted" />
-            <input
-              type="text"
-              placeholder="Filter sessions..."
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              className="bg-motorsport-charcoal border border-motorsport-border rounded-sm pl-7 pr-3 py-1.5 text-xs text-motorsport-text placeholder-motorsport-dim focus:outline-none focus:border-motorsport-orange w-48"
-            />
-          </div>
-
-          {/* Import Button */}
-          <button
-            onClick={() => setImportModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-orange text-motorsport-black rounded-sm text-xs font-semibold hover:bg-motorsport-orange/90 transition-colors"
-          >
-            <Upload className="w-3 h-3" />
-            Import
-          </button>
         </div>
       </div>
 
@@ -242,17 +248,17 @@ export default function SessionTable() {
       <div className="flex-1 telemetry-panel overflow-hidden flex flex-col">
         <div className="flex-1 overflow-auto">
           <table className="w-full">
-            <thead className="sticky top-0 bg-motorsport-panel z-10">
-              <tr className="text-[10px] text-motorsport-muted uppercase tracking-wider border-b border-motorsport-border">
-                <th className="text-left p-3">Status</th>
-                <th className="text-left p-3">Name</th>
-                <th className="text-left p-3">Track</th>
-                <th className="text-left p-3">Type</th>
-                <th className="text-left p-3">Date</th>
-                <th className="text-right p-3">Laps</th>
-                <th className="text-right p-3">Samples</th>
-                <th className="text-right p-3">Best Lap</th>
-                <th className="text-center p-3">Actions</th>
+            <thead className="sticky top-0 bg-motorsport-dark z-10 border-b border-motorsport-border">
+              <tr className="telemetry-label">
+                <th className="text-left px-3 py-2.5">Status</th>
+                <th className="text-left px-3 py-2.5">Name</th>
+                <th className="text-left px-3 py-2.5">Track</th>
+                <th className="text-left px-3 py-2.5">Type</th>
+                <th className="text-left px-3 py-2.5">Date</th>
+                <th className="text-right px-3 py-2.5">Laps</th>
+                <th className="text-right px-3 py-2.5">Samples</th>
+                <th className="text-right px-3 py-2.5">Best Lap</th>
+                <th className="text-center px-3 py-2.5">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -273,60 +279,51 @@ export default function SessionTable() {
               {filtered.map(s => (
                 <tr
                   key={s.id}
-                  className={`border-b border-motorsport-border/50 hover:bg-motorsport-surface/30 transition-colors cursor-pointer ${
-                    selectedSession === s.id ? 'bg-motorsport-orange/5' : ''
-                  }`}
+                  className={`table-row-interactive ${selectedSession === s.id ? 'bg-motorsport-orange/5' : ''}`}
                   onClick={() => setSelectedSession(s.id)}
                 >
-                  <td className="p-3">
-                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-sm border ${
-                      s.status === 'active'
-                        ? 'bg-motorsport-green/10 text-motorsport-green border-motorsport-green/30'
-                        : 'bg-motorsport-muted/10 text-motorsport-muted border-motorsport-muted/30'
-                    }`}>
-                      {s.status === 'active' ? (
-                        <><Flag className="w-3 h-3" /> LIVE</>
-                      ) : (
-                        <><FileSpreadsheet className="w-3 h-3" /> {s.source === 'csv' ? 'CSV' : 'SAVED'}</>
-                      )}
-                    </span>
+                  <td className="px-3 py-2.5">
+                    {s.status === 'active' ? (
+                      <span className="badge-live"><Flag className="w-3 h-3" />Live</span>
+                    ) : s.source === 'csv' ? (
+                      <span className="badge-csv"><FileSpreadsheet className="w-3 h-3" />CSV</span>
+                    ) : (
+                      <span className="badge-saved"><FileSpreadsheet className="w-3 h-3" />Saved</span>
+                    )}
                   </td>
-                  <td className="p-3 text-sm font-medium">{s.name}</td>
-                  <td className="p-3 text-sm text-motorsport-muted">{s.track}</td>
-                  <td className="p-3">
-                    <span className="text-xs px-2 py-0.5 bg-motorsport-charcoal rounded-sm text-motorsport-text">
+                  <td className="px-3 py-2.5 text-[13px] font-medium text-motorsport-text">{s.name}</td>
+                  <td className="px-3 py-2.5 text-[13px] text-motorsport-muted">{s.track}</td>
+                  <td className="px-3 py-2.5">
+                    <span className="text-[11px] px-2 py-0.5 bg-motorsport-surface rounded border border-motorsport-border text-motorsport-muted">
                       {s.session_type}
                     </span>
                   </td>
-                  <td className="p-3 text-sm text-motorsport-muted">
-                    <div className="flex items-center gap-1">
+                  <td className="px-3 py-2.5 text-[12px] text-motorsport-muted">
+                    <div className="flex items-center gap-1.5">
                       <Calendar className="w-3 h-3" />
                       {s.date}
                     </div>
                   </td>
-                  <td className="p-3 text-right font-telemetry text-sm">{s.laps}</td>
-                  <td className="p-3 text-right font-telemetry text-sm text-motorsport-muted">
-                    {s.sample_count > 0 ? s.sample_count.toLocaleString() : '--'}
+                  <td className="px-3 py-2.5 text-right font-telemetry text-[13px]">{s.laps}</td>
+                  <td className="px-3 py-2.5 text-right font-telemetry text-[13px] text-motorsport-muted">
+                    {s.sample_count > 0 ? s.sample_count.toLocaleString() : '—'}
                   </td>
-                  <td className="p-3 text-right font-telemetry text-sm text-motorsport-cyan">
-                    {s.best_lap_ms > 0 ? formatTime(s.best_lap_ms) : '--:--'}
+                  <td className="px-3 py-2.5 text-right font-telemetry text-[13px] text-motorsport-cyan">
+                    {s.best_lap_ms > 0 ? formatTime(s.best_lap_ms) : '—:——'}
                   </td>
-                  <td className="p-3">
-                    <div className="flex items-center justify-center gap-1">
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center justify-center gap-0.5">
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleView(s.id);
-                        }}
-                        className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
-                        title="View Session"
+                        onClick={(e) => { e.stopPropagation(); handleView(s.id); }}
+                        className="icon-btn"
+                        title="View"
                       >
                         <Eye className="w-3.5 h-3.5 text-motorsport-cyan" />
                       </button>
                       {(s.source === 'live' || s.source === 'local') && (
                         <button
                           onClick={(e) => handleReplay(s.id, e)}
-                          className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
+                          className="icon-btn"
                           title="Replay"
                         >
                           <Play className="w-3.5 h-3.5 text-motorsport-green" />
@@ -334,18 +331,25 @@ export default function SessionTable() {
                       )}
                       <button
                         onClick={(e) => handleExport(s.id, s.source, e)}
-                        className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
+                        className="icon-btn"
                         title="Export"
                       >
-                        <Download className="w-3.5 h-3.5 text-motorsport-muted" />
+                        <Download className="w-3.5 h-3.5" />
                       </button>
                       {s.source !== 'live' && (
                         <button
                           onClick={(e) => handleDelete(s.id, s.source, e)}
-                          className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
-                          title="Delete"
+                          className={`p-1.5 rounded transition-colors ${
+                            confirmDelete === s.id
+                              ? 'bg-motorsport-red/20 text-motorsport-red'
+                              : 'text-motorsport-dim hover:text-motorsport-red hover:bg-motorsport-surface'
+                          }`}
+                          title={confirmDelete === s.id ? 'Click again to confirm' : 'Delete'}
                         >
-                          <Trash2 className="w-3.5 h-3.5 text-motorsport-red" />
+                          {confirmDelete === s.id
+                            ? <AlertTriangle className="w-3.5 h-3.5" />
+                            : <Trash2 className="w-3.5 h-3.5" />
+                          }
                         </button>
                       )}
                     </div>

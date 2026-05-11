@@ -123,19 +123,19 @@ export default function TelemetryGraphCanvas({
         });
       });
 
-      // X-axis distance labels
-      const firstLap = laps[0];
-      if (firstLap && firstLap.data.length > 0) {
+      // X-axis distance labels — use the longest lap so the axis matches the zoom range
+      const refLap = laps.reduce((best, l) => l.data.length > best.data.length ? l : best, laps[0]);
+      if (refLap && refLap.data.length > 0) {
         ctx.fillStyle = '#555';
         ctx.font = '9px monospace';
         ctx.textAlign = 'center';
         const numTicks = 6;
         for (let t = 0; t <= numTicks; t++) {
           const idx = Math.max(0, Math.min(
-            firstLap.data.length - 1,
+            refLap.data.length - 1,
             Math.floor(zStart + (t / numTicks) * zoomSamples)
           ));
-          const dist = firstLap.data[idx]?.cumulative_distance ?? 0;
+          const dist = refLap.data[idx]?.cumulative_distance ?? 0;
           const x = PAD.left + (t / numTicks) * graphWidth;
           const label = dist >= 1000 ? `${(dist / 1000).toFixed(2)}km` : `${Math.round(dist)}m`;
           ctx.fillText(label, x, PAD.top + graphHeight + 16);

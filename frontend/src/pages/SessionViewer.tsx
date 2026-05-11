@@ -133,10 +133,13 @@ export default function SessionViewer() {
       });
       setLaps(lapData);
 
-      const firstValid = lapData.findIndex(l => l.valid);
-      if (firstValid >= 0) {
-        setSelectedLaps(new Set([firstValid]));
-        setCurrentLapIndex(firstValid);
+      // Prefer first lap with a recorded time (flying lap), fall back to first valid with enough data
+      const firstTimed = lapData.findIndex(l => l.lapTimeMs != null);
+      const firstSubstantial = lapData.findIndex(l => l.valid && l.sampleCount > 100);
+      const autoSelect = firstTimed >= 0 ? firstTimed : firstSubstantial;
+      if (autoSelect >= 0) {
+        setSelectedLaps(new Set([autoSelect]));
+        setCurrentLapIndex(autoSelect);
       }
     };
 
@@ -207,11 +210,12 @@ export default function SessionViewer() {
     return lap.samples[effectiveIndex];
   }, [selectedLapData, currentLapIndex, effectiveIndex]);
 
-  // Reset zoom when selected laps change
+  // Reset zoom when selected laps change — use the longest lap so all laps stay visible
   useEffect(() => {
-    const lap = selectedLapData[0];
-    if (lap && lap.samples.length > 1) {
-      setZoomRange([0, lap.samples.length - 1]);
+    if (selectedLapData.length === 0) return;
+    const maxLen = Math.max(...selectedLapData.map(l => l.samples.length));
+    if (maxLen > 1) {
+      setZoomRange([0, maxLen - 1]);
       setCurrentIndex(0);
       setHoverIndex(0);
       hoverIndexRef.current = 0;

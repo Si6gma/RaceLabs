@@ -8,7 +8,7 @@ import { useNavigate } from 'react-router-dom';
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 export default function SessionTable() {
-  const { session, importedSessions, setImportedSessions, setImportModalOpen, removeImportedSession, setSelectedImportedSession } = useTelemetryStore();
+  const { session, importedSessions, setImportedSessions, setImportModalOpen, removeImportedSession } = useTelemetryStore();
   const [filter, setFilter] = useState('');
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -186,12 +186,8 @@ export default function SessionTable() {
   }, []);
 
   const handleView = useCallback((id: string) => {
-    const importedSession = importedSessions.find(s => s.id === id);
-    if (importedSession) {
-      setSelectedImportedSession(importedSession);
-      navigate(`/session/${id}`);
-    }
-  }, [importedSessions, setSelectedImportedSession, navigate]);
+    navigate(`/session/${id}`);
+  }, [navigate]);
 
   return (
     <div className="h-full flex flex-col p-3 gap-3">
@@ -317,18 +313,16 @@ export default function SessionTable() {
                   </td>
                   <td className="p-3">
                     <div className="flex items-center justify-center gap-1">
-                      {s.source === 'csv' && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleView(s.id);
-                          }}
-                          className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
-                          title="View Session"
-                        >
-                          <Eye className="w-3.5 h-3.5 text-motorsport-cyan" />
-                        </button>
-                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleView(s.id);
+                        }}
+                        className="p-1 rounded-sm hover:bg-motorsport-surface transition-colors"
+                        title="View Session"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-motorsport-cyan" />
+                      </button>
                       {(s.source === 'live' || s.source === 'local') && (
                         <button
                           onClick={(e) => handleReplay(s.id, e)}

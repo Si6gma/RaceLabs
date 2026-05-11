@@ -196,6 +196,15 @@ async def get_sessions():
     return {"sessions": pipeline.get_all_sessions()}
 
 
+@app.get("/api/sessions/{session_id}")
+async def get_live_session(session_id: str):
+    """Get a single live session with its frames and laps."""
+    data = pipeline.get_session_data(session_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+
 @app.get("/api/sessions/{session_id}/export")
 async def export_session(session_id: str):
     data = pipeline.get_session_data(session_id)

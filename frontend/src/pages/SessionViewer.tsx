@@ -6,52 +6,45 @@ import {
   BarChart3, Map as MapIcon, SlidersHorizontal, Lock, Unlock
 } from 'lucide-react';
 import type { TelemetrySample, ImportedLap, ImportedSession } from '@/types/telemetry';
+import TelemetryGraphCanvas, { CHANNELS, DEFAULT_VISIBLE } from '@/components/TelemetryGraphCanvas';
+import TrackMapViewer from '@/components/TrackMapViewer';
+import { normalizeImportedSamples, normalizeLiveFrames, type TelemetryPoint } from '@/utils/telemetryAdapter';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
-
-interface LapTelemetry {
-  lap: ImportedLap;
-  samples: TelemetrySample[];
-  color: string;
-}
 
 const LAP_COLORS = [
   '#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4',
 ];
 
-interface ChannelDef {
-  key: keyof TelemetrySample;
-  label: string;
+interface UnifiedLap {
+  id: string;
+  lapNumber: number;
+  lapTimeMs?: number;
+  valid: boolean;
+  maxSpeed: number;
+  sampleCount: number;
+  primaryPhase?: string;
+  isTimedLap?: boolean;
+  samples: TelemetryPoint[];
   color: string;
-  min: number;
-  max: number;
-  scale: number;   // fraction of graph height
-  offset: number;  // fraction from top (0=top, 1=bottom)
-  unit: string;
-  transform?: (v: number) => number;
-  decimals: number;
 }
 
-const CHANNELS: ChannelDef[] = [
-  { key: 'speed_kmh', label: 'Speed', color: '#3b82f6', min: 0, max: 350, scale: 1.0, offset: 0, unit: ' km/h', decimals: 0 },
-  { key: 'rpm', label: 'RPM', color: '#a855f7', min: 0, max: 15000, scale: 1.0, offset: 0, unit: '', decimals: 0 },
-  { key: 'throttle', label: 'Throttle', color: '#22c55e', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
-  { key: 'brake', label: 'Brake', color: '#ef4444', min: 0, max: 1, scale: 0.22, offset: 0.78, unit: '%', transform: v => v * 100, decimals: 0 },
-  { key: 'steering', label: 'Steering', color: '#06b6d4', min: -1, max: 1, scale: 0.35, offset: 0.325, unit: '%', transform: v => v * 100, decimals: 0 },
-  { key: 'gear', label: 'Gear', color: '#f59e0b', min: 0, max: 8, scale: 0.18, offset: 0.8, unit: '', decimals: 0 },
-  { key: 'gforce_lat', label: 'G-Force', color: '#ec4899', min: 0, max: 6, scale: 0.22, offset: 0, unit: 'G', decimals: 2 },
-  { key: 'delta_time', label: 'Delta', color: '#ffffff', min: -5, max: 5, scale: 0.3, offset: 0.35, unit: 's', decimals: 3 },
-];
-
-const DEFAULT_VISIBLE = new Set(['speed_kmh', 'throttle', 'brake']);
+interface UnifiedSession {
+  id: string;
+  name: string;
+  track: string;
+  lapCount: number;
+  sampleCount: number;
+  source: 'imported' | 'live';
+}
 
 export default function SessionViewer() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const { setSelectedImportedSession } = useTelemetryStore();
 
-  const [session, setSession] = useState<ImportedSession | null>(null);
-  const [laps, setLaps] = useState<LapTelemetry[]>([]);
+  const [session, setSession] = useState<UnifiedSession | null>(null);
+  const [laps, setLaps] = useState<UnifiedLap[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLaps, setSelectedLaps] = useState<Set<number>>(new Set());
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -61,64 +54,144 @@ export default function SessionViewer() {
   const [visibleChannels, setVisibleChannels] = useState<Set<string>>(new Set(DEFAULT_VISIBLE));
   const [filterOpen, setFilterOpen] = useState(false);
 
-  // Cursor: hover follows mouse, click locks/unlocks
   const [cursorLocked, setCursorLocked] = useState(false);
   const [hoverIndex, setHoverIndex] = useState(0);
   const hoverIndexRef = useRef(0);
 
-  // Zoom state: sample index range [start, end]
   const [zoomRange, setZoomRange] = useState<[number, number]>([0, 1]);
   const isDragging = useRef(false);
   const hasDragged = useRef(false);
   const dragStartX = useRef(0);
   const dragStartZoom = useRef<[number, number]>([0, 1]);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const trackCanvasRef = useRef<HTMLCanvasElement>(null);
+  const graphContainerRef = useRef<HTMLDivElement>(null);
 
-  // Load session data
+  // Load session data (imported first, then live fallback)
   useEffect(() => {
     if (!sessionId) return;
 
     const load = async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${API_URL}/api/import/sessions/${sessionId}`);
-        if (!res.ok) throw new Error('Session not found');
-        const data = await res.json();
-        setSession(data);
-        setSelectedImportedSession(data);
 
-        const lapData: LapTelemetry[] = [];
-        for (let i = 0; i < data.laps.length; i++) {
-          const lap = data.laps[i];
-          const telemRes = await fetch(`${API_URL}/api/import/laps/${lap.id}/telemetry`);
-          if (telemRes.ok) {
-            const telem = await telemRes.json();
-            lapData.push({
-              lap,
-              samples: telem.samples,
-              color: LAP_COLORS[i % LAP_COLORS.length],
-            });
-          }
+        // Try imported first
+        const importedRes = await fetch(`${API_URL}/api/import/sessions/${sessionId}`);
+        if (importedRes.ok) {
+          const data = await importedRes.json();
+          await loadImported(data);
+          return;
         }
-        setLaps(lapData);
 
-        const firstValid = lapData.findIndex(l => l.lap.valid);
-        if (firstValid >= 0) {
-          setSelectedLaps(new Set([firstValid]));
-          setCurrentLapIndex(firstValid);
+        // Fallback to live session
+        const liveRes = await fetch(`${API_URL}/api/sessions/${sessionId}`);
+        if (liveRes.ok) {
+          const data = await liveRes.json();
+          await loadLive(data);
+          return;
         }
+
+        setSession(null);
       } catch (err) {
         console.error('Failed to load session:', err);
+        setSession(null);
       } finally {
         setLoading(false);
+      }
+    };
+
+    const loadImported = async (data: ImportedSession & { laps: ImportedLap[] }) => {
+      setSelectedImportedSession(data);
+
+      const lapData: UnifiedLap[] = [];
+      for (let i = 0; i < data.laps.length; i++) {
+        const lap = data.laps[i];
+        const telemRes = await fetch(`${API_URL}/api/import/laps/${lap.id}/telemetry`);
+        let samples: TelemetrySample[] = [];
+        if (telemRes.ok) {
+          const telem = await telemRes.json();
+          samples = telem.samples;
+        }
+        lapData.push({
+          id: lap.id,
+          lapNumber: lap.lap_number,
+          lapTimeMs: lap.lap_time_ms,
+          valid: lap.valid,
+          maxSpeed: lap.max_speed,
+          sampleCount: samples.length,
+          samples: normalizeImportedSamples(samples),
+          color: LAP_COLORS[i % LAP_COLORS.length],
+        });
+      }
+
+      setSession({
+        id: data.id,
+        name: data.name,
+        track: data.track,
+        lapCount: data.lap_count,
+        sampleCount: data.sample_count,
+        source: 'imported',
+      });
+      setLaps(lapData);
+
+      const firstValid = lapData.findIndex(l => l.valid);
+      if (firstValid >= 0) {
+        setSelectedLaps(new Set([firstValid]));
+        setCurrentLapIndex(firstValid);
+      }
+    };
+
+    const loadLive = (data: any) => {
+      // Group frames by lap number
+      const framesByLap: Record<number, any[]> = {};
+      (data.frames || []).forEach((frame: any) => {
+        const lapNum = frame.lap?.current_lap_num ?? 0;
+        if (!framesByLap[lapNum]) framesByLap[lapNum] = [];
+        framesByLap[lapNum].push(frame);
+      });
+
+      const lapNumbers = Object.keys(framesByLap)
+        .map(Number)
+        .filter(n => n > 0)
+        .sort((a, b) => a - b);
+
+      const lapData: UnifiedLap[] = [];
+      lapNumbers.forEach((lapNum, i) => {
+        const frames = framesByLap[lapNum];
+        const meta = data.laps?.[String(lapNum)] || {};
+        lapData.push({
+          id: `lap_${lapNum}`,
+          lapNumber: lapNum,
+          lapTimeMs: meta.best_lap_time,
+          valid: meta.valid ?? true,
+          maxSpeed: 0,
+          sampleCount: frames.length,
+          primaryPhase: meta.primary_phase,
+          isTimedLap: meta.is_timed_lap,
+          samples: normalizeLiveFrames(frames),
+          color: LAP_COLORS[i % LAP_COLORS.length],
+        });
+      });
+
+      setSession({
+        id: data.session_id,
+        name: data.session_id,
+        track: data.track,
+        lapCount: lapData.length,
+        sampleCount: data.frames?.length || 0,
+        source: 'live',
+      });
+      setLaps(lapData);
+
+      if (lapData.length > 0) {
+        setSelectedLaps(new Set([0]));
+        setCurrentLapIndex(0);
       }
     };
 
     load();
   }, [sessionId, setSelectedImportedSession]);
 
+  // Selected lap data for graph/map
   const selectedLapData = useMemo(() => {
     const indices = Array.from(selectedLaps);
     if (indices.length === 0 && laps.length > 0) return [laps[0]];
@@ -144,195 +217,12 @@ export default function SessionViewer() {
       hoverIndexRef.current = 0;
       setCursorLocked(false);
     }
-  }, [selectedLapData.map(l => l.lap.id).join(',')]);
-
-  // Draw telemetry graphs
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || selectedLapData.length === 0) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-
-    const width = rect.width;
-    const height = rect.height;
-    const padding = { top: 20, right: 60, bottom: 30, left: 50 };
-    const graphWidth = width - padding.left - padding.right;
-    const graphHeight = height - padding.top - padding.bottom;
-
-    ctx.clearRect(0, 0, width, height);
-
-    const [zStart, zEnd] = zoomRange;
-    const zoomSamples = Math.max(1, zEnd - zStart);
-
-    // Grid
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 5; i++) {
-      const y = padding.top + (graphHeight / 5) * i;
-      ctx.beginPath();
-      ctx.moveTo(padding.left, y);
-      ctx.lineTo(width - padding.right, y);
-      ctx.stroke();
-    }
-
-    // Draw each visible channel for each selected lap
-    CHANNELS.forEach(ch => {
-      if (!visibleChannels.has(ch.key as string)) return;
-
-      selectedLapData.forEach((lapData) => {
-        const samples = lapData.samples;
-        if (samples.length < 2) return;
-
-        const xScale = graphWidth / zoomSamples;
-        const startI = Math.max(0, Math.floor(zStart));
-        const endI = Math.min(samples.length - 1, Math.ceil(zEnd));
-
-        ctx.strokeStyle = ch.color;
-        ctx.lineWidth = ch.key === 'speed_kmh' || ch.key === 'rpm' ? 1.5 : 1;
-        if (ch.key === 'throttle' || ch.key === 'brake') ctx.globalAlpha = 0.35;
-        else if (ch.key === 'delta_time') ctx.globalAlpha = 0.6;
-        else ctx.globalAlpha = 0.9;
-
-        ctx.beginPath();
-        let first = true;
-        for (let i = startI; i <= endI; i++) {
-          const s = samples[i];
-          const val = s[ch.key] as number;
-          const x = padding.left + (i - zStart) * xScale;
-          const normalized = (val - ch.min) / (ch.max - ch.min);
-          const y = padding.top + graphHeight * ch.offset + graphHeight * ch.scale * (1 - normalized);
-          if (first) { ctx.moveTo(x, y); first = false; }
-          else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      });
-    });
-
-    // Cursor line at effectiveIndex
-    if (effectiveIndex >= zStart && effectiveIndex <= zEnd) {
-      const xScale = graphWidth / zoomSamples;
-      const x = padding.left + (effectiveIndex - zStart) * xScale;
-
-      ctx.strokeStyle = cursorLocked ? '#fff' : 'rgba(255,255,255,0.5)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash(cursorLocked ? [4, 4] : [2, 6]);
-      ctx.beginPath();
-      ctx.moveTo(x, padding.top);
-      ctx.lineTo(x, height - padding.bottom);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Zoom window indicator (mini bar at bottom)
-    if (zoomSamples < (selectedLapData[0]?.samples.length || 1)) {
-      const total = selectedLapData[0].samples.length - 1;
-      const barY = height - 6;
-      const barW = graphWidth;
-      const barX = padding.left;
-      ctx.fillStyle = '#222';
-      ctx.fillRect(barX, barY, barW, 4);
-      ctx.fillStyle = '#3b82f6';
-      const rs = zStart / total;
-      const re = zEnd / total;
-      ctx.fillRect(barX + rs * barW, barY, (re - rs) * barW, 4);
-    }
-
-    // Y-axis labels (Speed primary)
-    ctx.fillStyle = '#888';
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText('350', padding.left - 5, padding.top + 5);
-    ctx.fillText('175', padding.left - 5, padding.top + graphHeight / 2 + 5);
-    ctx.fillText('0', padding.left - 5, padding.top + graphHeight - 5);
-
-    // Right-side channel labels
-    ctx.textAlign = 'left';
-    let labelY = padding.top + 10;
-    CHANNELS.forEach(ch => {
-      if (!visibleChannels.has(ch.key as string)) return;
-      ctx.fillStyle = ch.color;
-      ctx.font = '9px monospace';
-      ctx.fillText(ch.label, width - padding.right + 6, labelY);
-      labelY += 12;
-    });
-
-  }, [selectedLapData, visibleChannels, currentIndex, hoverIndex, cursorLocked, zoomRange]);
-
-  // Draw track map
-  useEffect(() => {
-    const canvas = trackCanvasRef.current;
-    if (!canvas || selectedLapData.length === 0) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.scale(dpr, dpr);
-
-    const width = rect.width;
-    const height = rect.height;
-
-    ctx.clearRect(0, 0, width, height);
-
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    selectedLapData.forEach(lap => {
-      lap.samples.forEach(s => {
-        minX = Math.min(minX, s.world_position_x);
-        maxX = Math.max(maxX, s.world_position_x);
-        minZ = Math.min(minZ, s.world_position_z);
-        maxZ = Math.max(maxZ, s.world_position_z);
-      });
-    });
-
-    const margin = 20;
-    const mapWidth = maxX - minX || 1;
-    const mapHeight = maxZ - minZ || 1;
-    const scale = Math.min((width - margin * 2) / mapWidth, (height - margin * 2) / mapHeight);
-
-    const offsetX = (width - mapWidth * scale) / 2 - minX * scale;
-    const offsetY = (height - mapHeight * scale) / 2 - minZ * scale;
-
-    selectedLapData.forEach(lap => {
-      ctx.strokeStyle = lap.color;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      lap.samples.forEach((s, i) => {
-        const x = s.world_position_x * scale + offsetX;
-        const y = s.world_position_z * scale + offsetY;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-    });
-
-    if (currentSample) {
-      const x = currentSample.world_position_x * scale + offsetX;
-      const y = currentSample.world_position_z * scale + offsetY;
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
-  }, [selectedLapData, currentSample]);
+  }, [selectedLapData.map(l => l.id).join(',')]);
 
   const getSampleIndexFromX = useCallback((clientX: number): number => {
-    const canvas = canvasRef.current;
-    if (!canvas || selectedLapData.length === 0) return 0;
-    const rect = canvas.getBoundingClientRect();
+    const container = graphContainerRef.current;
+    if (!container || selectedLapData.length === 0) return 0;
+    const rect = container.getBoundingClientRect();
     const x = clientX - rect.left;
     const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
@@ -342,14 +232,14 @@ export default function SessionViewer() {
     return Math.floor(zStart + ratio * zoomSamples);
   }, [selectedLapData, zoomRange]);
 
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
+  const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
     const lap = selectedLapData[0];
     if (!lap || lap.samples.length < 2) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    const container = graphContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
     const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
     const mouseX = e.clientX - rect.left;
@@ -373,7 +263,7 @@ export default function SessionViewer() {
     setZoomRange([newStart, newEnd]);
   }, [selectedLapData, zoomRange]);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     isDragging.current = true;
     hasDragged.current = false;
@@ -381,7 +271,7 @@ export default function SessionViewer() {
     dragStartZoom.current = [...zoomRange];
   }, [zoomRange]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging.current) {
       const idx = getSampleIndexFromX(e.clientX);
       const lap = selectedLapData[0];
@@ -394,9 +284,9 @@ export default function SessionViewer() {
     const dx = Math.abs(e.clientX - dragStartX.current);
     if (dx > 4) hasDragged.current = true;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    const container = graphContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
     const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
     const lap = selectedLapData[0];
@@ -466,28 +356,30 @@ export default function SessionViewer() {
           <div>
             <h1 className="text-sm font-semibold">{session.name}</h1>
             <p className="text-xs text-motorsport-muted">
-              {session.track} · {session.lap_count} laps · {session.sample_count?.toLocaleString()} samples
+              {session.track} · {session.lapCount} laps · {session.sampleCount.toLocaleString()} samples
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={async () => {
-              const res = await fetch(`${API_URL}/api/import/sessions/${sessionId}/export?format=csv`);
-              if (res.ok) {
-                const blob = await res.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${session.name}.csv`;
-                a.click();
-              }
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-surface rounded-sm text-xs hover:bg-motorsport-surface/80 transition-colors"
-          >
-            <Download className="w-3 h-3" />
-            Export
-          </button>
+          {session.source === 'imported' && (
+            <button
+              onClick={async () => {
+                const res = await fetch(`${API_URL}/api/import/sessions/${sessionId}/export?format=csv`);
+                if (res.ok) {
+                  const blob = await res.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${session.name}.csv`;
+                  a.click();
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-surface rounded-sm text-xs hover:bg-motorsport-surface/80 transition-colors"
+            >
+              <Download className="w-3 h-3" />
+              Export
+            </button>
+          )}
         </div>
       </div>
 
@@ -503,7 +395,7 @@ export default function SessionViewer() {
           <div className="flex-1 overflow-auto p-2 space-y-1">
             {laps.map((lapData, idx) => (
               <button
-                key={lapData.lap.id}
+                key={lapData.id}
                 onClick={() => {
                   const newSet = new Set(selectedLaps);
                   if (newSet.has(idx)) newSet.delete(idx);
@@ -523,21 +415,26 @@ export default function SessionViewer() {
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-medium" style={{ color: lapData.color }}>
-                    Lap {lapData.lap.lap_number}
+                    Lap {lapData.lapNumber}
                   </span>
-                  {lapData.lap.valid ? (
+                  {lapData.valid ? (
                     <span className="text-[9px] text-motorsport-green">VALID</span>
                   ) : (
                     <span className="text-[9px] text-motorsport-red">INVALID</span>
                   )}
                 </div>
                 <div className="flex items-center justify-between text-motorsport-muted">
-                  <span>{lapData.lap.lap_time_ms ? formatLapTime(lapData.lap.lap_time_ms) : '--:--'}</span>
-                  <span>{lapData.samples.length} pts</span>
+                  <span>{lapData.lapTimeMs ? formatLapTime(lapData.lapTimeMs) : '--:--'}</span>
+                  <span>{lapData.sampleCount} pts</span>
                 </div>
                 <div className="flex items-center gap-2 mt-1 text-[10px] text-motorsport-dim">
-                  <span>Max: {lapData.lap.max_speed.toFixed(0)} km/h</span>
+                  <span>Max: {lapData.maxSpeed.toFixed(0)} km/h</span>
                 </div>
+                {lapData.primaryPhase && (
+                  <div className="text-[10px] text-motorsport-dim capitalize">
+                    {lapData.primaryPhase.replace('_', ' ')}
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -661,15 +558,21 @@ export default function SessionViewer() {
 
           {/* Main content area */}
           {viewMode === 'graph' ? (
-            <div className="flex-1 telemetry-panel min-h-0 relative">
-              <canvas
-                ref={canvasRef}
-                className={`w-full h-full ${cursorLocked ? 'cursor-pointer' : 'cursor-crosshair'}`}
-                onWheel={handleWheel}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
+            <div
+              ref={graphContainerRef}
+              className="flex-1 telemetry-panel min-h-0 relative"
+              onWheel={handleWheel}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+            >
+              <TelemetryGraphCanvas
+                laps={selectedLapData.map(l => ({ data: l.samples, color: l.color }))}
+                visibleChannels={visibleChannels}
+                zoomRange={zoomRange}
+                effectiveIndex={effectiveIndex}
+                cursorLocked={cursorLocked}
               />
             </div>
           ) : (
@@ -681,10 +584,15 @@ export default function SessionViewer() {
                 </div>
               </div>
               <div className="flex-1 p-2 min-h-0">
-                <canvas
-                  ref={trackCanvasRef}
-                  className="w-full h-full"
-                />
+                {selectedLapData.map((lap, i) => (
+                  <div key={lap.id} className="w-full h-full">
+                    <TrackMapViewer
+                      data={lap.samples}
+                      color={lap.color}
+                      currentPoint={i === (currentLapIndex % selectedLapData.length) ? currentSample : undefined}
+                    />
+                  </div>
+                ))}
               </div>
               {selectedLapData.length > 1 && (
                 <div className="p-2 border-t border-motorsport-border shrink-0">
@@ -693,12 +601,12 @@ export default function SessionViewer() {
                     {selectedLapData.map((lap, i) => {
                       if (i === 0) return null;
                       const refLap = selectedLapData[0];
-                      const refTime = refLap.lap.lap_time_ms || 0;
-                      const lapTime = lap.lap.lap_time_ms || 0;
+                      const refTime = refLap.lapTimeMs || 0;
+                      const lapTime = lap.lapTimeMs || 0;
                       const delta = lapTime - refTime;
                       return (
-                        <div key={lap.lap.id} className="flex items-center justify-between text-xs">
-                          <span style={{ color: lap.color }}>Lap {lap.lap.lap_number}</span>
+                        <div key={lap.id} className="flex items-center justify-between text-xs">
+                          <span style={{ color: lap.color }}>Lap {lap.lapNumber}</span>
                           <span className={`font-telemetry ${delta > 0 ? 'text-motorsport-red' : 'text-motorsport-green'}`}>
                             {delta >= 0 ? '+' : ''}{(delta / 1000).toFixed(3)}s
                           </span>

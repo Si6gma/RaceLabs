@@ -1,8 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { 
   Activity, 
-  LineChart, 
-  Map, 
   GitCompare, 
   Table, 
   BarChart3, 
@@ -15,8 +13,6 @@ import { useTelemetryStore } from '@/stores/telemetryStore';
 
 const navItems = [
   { path: '/', label: 'Live', icon: Activity },
-  { path: '/charts', label: 'Telemetry', icon: LineChart },
-  { path: '/track', label: 'Track', icon: Map },
   { path: '/compare', label: 'Compare', icon: GitCompare },
   { path: '/sessions', label: 'Sessions', icon: Table },
   { path: '/stats', label: 'Analytics', icon: BarChart3 },

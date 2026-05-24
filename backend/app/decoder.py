@@ -345,8 +345,8 @@ class F1Decoder:
         try:
             m.world_pos_x, m.world_pos_y, m.world_pos_z = struct.unpack_from('<3f', data, offset)
             offset += 12
-            m.g_force_lat, m.g_force_lon, m.g_force_vert = struct.unpack_from('<3f', data, offset + 36)
-            m.yaw, m.pitch, m.roll = struct.unpack_from('<3f', data, offset + 48)
+            m.g_force_lat, m.g_force_lon, m.g_force_vert = struct.unpack_from('<3f', data, offset + 24)
+            m.yaw, m.pitch, m.roll = struct.unpack_from('<3f', data, offset + 36)
         except Exception:
             pass
         return m
@@ -402,9 +402,9 @@ class F1Decoder:
             return LapData()
 
     def _decode_car_telemetry(self, data: bytes, player_idx: int) -> CarTelemetry:
-        # CarTelemetry per car: 58 bytes
+        # CarTelemetry per car: 60 bytes
         # Group adjacent same-type fields to minimize struct calls
-        offset = self.HEADER_SIZE + (player_idx * 58)
+        offset = self.HEADER_SIZE + (player_idx * 60)
         try:
             d0 = struct.unpack_from('<H', data, offset)         # 0-1 (speed)
             d1 = struct.unpack_from('<3f', data, offset + 2)    # 2-13 (throttle, steer, brake)
@@ -441,23 +441,23 @@ class F1Decoder:
             return CarTelemetry()
 
     def _decode_car_status(self, data: bytes, player_idx: int) -> CarStatus:
-        # CarStatus per car: 60 bytes of actual fields (game struct is 61)
-        # Group adjacent same-type fields to minimize struct calls
-        offset = self.HEADER_SIZE + (player_idx * 61)
+        # CarStatus per car: 55 bytes (F1 24)
+        # F1 24 layout vs F1 23: added enginePowerICE/ERS (8 bytes) after vehicleFiaFlags,
+        # removed tyre/wing/engine damage fields (moved to CarDamage packet).
+        offset = self.HEADER_SIZE + (player_idx * 55)
         try:
-            d0 = struct.unpack_from('<5B', data, offset)        # 0-4
-            d1 = struct.unpack_from('<3f', data, offset + 5)    # 5-16
-            d2 = struct.unpack_from('<2H', data, offset + 17)   # 17-20
-            d3 = struct.unpack_from('<B', data, offset + 21)    # 21
-            d4 = struct.unpack_from('<B', data, offset + 22)    # 22
-            d5 = struct.unpack_from('<H', data, offset + 23)    # 23-24
-            d6 = struct.unpack_from('<4B', data, offset + 25)   # 25-28
-            d7 = struct.unpack_from('<3B', data, offset + 29)   # 29-31
-            d8 = struct.unpack_from('<4B', data, offset + 32)   # 32-35
-            d9 = struct.unpack_from('<7B', data, offset + 36)   # 36-42
-            d10 = struct.unpack_from('<f', data, offset + 43)   # 43-46
-            d11 = struct.unpack_from('<B', data, offset + 47)   # 47
-            d12 = struct.unpack_from('<3f', data, offset + 48)  # 48-59
+            d0 = struct.unpack_from('<5B', data, offset)        # 0-4  tc,abs,fuelMix,brakeBias,pitLimiter
+            d1 = struct.unpack_from('<3f', data, offset + 5)    # 5-16 fuelInTank,fuelCapacity,fuelRemainingLaps
+            d2 = struct.unpack_from('<2H', data, offset + 17)   # 17-20 maxRPM,idleRPM
+            d3 = struct.unpack_from('<B', data, offset + 21)    # 21   maxGears
+            d4 = struct.unpack_from('<B', data, offset + 22)    # 22   drsAllowed
+            d5 = struct.unpack_from('<H', data, offset + 23)    # 23-24 drsActivationDistance
+            d6 = struct.unpack_from('<3B', data, offset + 25)   # 25-27 actualTyreCompound,visualTyreCompound,tyresAgeLaps
+            # 28: vehicleFiaFlags (skip)
+            # 29-36: enginePowerICE + enginePowerERS floats (skip)
+            d7 = struct.unpack_from('<f', data, offset + 37)    # 37-40 ersStoreEnergy
+            d8 = struct.unpack_from('<B', data, offset + 41)    # 41   ersDeployMode
+            d9 = struct.unpack_from('<3f', data, offset + 42)   # 42-53 ersHarvestedMGUK,MGUH,ersDeployed
             return CarStatus(
                 traction_control=d0[0],
                 anti_lock_brakes=d0[1],
@@ -472,35 +472,29 @@ class F1Decoder:
                 max_gears=d3[0],
                 drs_allowed=d4[0],
                 drs_activation_distance=d5[0],
-                tyres_wear=list(d6),
-                actual_tyre_compound=d7[0],
-                visual_tyre_compound=d7[1],
-                tyres_age_laps=d7[2],
-                tyres_damage=list(d8),
-                front_left_wing_damage=d9[0],
-                front_right_wing_damage=d9[1],
-                rear_wing_damage=d9[2],
-                drs_fault=d9[3],
-                engine_damage=d9[4],
-                gearbox_damage=d9[5],
-                vehicle_fia_flags=d9[6],
-                ers_store_energy=d10[0],
-                ers_deploy_mode=d11[0],
-                ers_harvested_this_lap_mguk=d12[0],
-                ers_harvested_this_lap_mguh=d12[1],
-                ers_deployed_this_lap=d12[2],
+                actual_tyre_compound=d6[0],
+                visual_tyre_compound=d6[1],
+                tyres_age_laps=d6[2],
+                ers_store_energy=d7[0],
+                ers_deploy_mode=d8[0],
+                ers_harvested_this_lap_mguk=d9[0],
+                ers_harvested_this_lap_mguh=d9[1],
+                ers_deployed_this_lap=d9[2],
             )
         except Exception:
             return CarStatus()
 
     def _decode_car_damage(self, data: bytes, player_idx: int) -> CarDamage:
-        # CarDamage per car: 35 bytes of actual fields (game struct is 39)
-        # Group adjacent same-type fields to minimize struct calls
-        offset = self.HEADER_SIZE + (player_idx * 39)
+        # CarDamage per car: 42 bytes (F1 24)
+        # F1 24 added ersFault at offset 27 (after drsFault), engineBlown/Seized at 36-37,
+        # and 4 bytes of reserved/new fields at 38-41.
+        offset = self.HEADER_SIZE + (player_idx * 42)
         try:
-            d0 = struct.unpack_from('<4f', data, offset)        # 0-15
-            d1 = struct.unpack_from('<4B', data, offset + 16)   # 16-19
-            d2 = struct.unpack_from('<15B', data, offset + 20)  # 20-34
+            d0 = struct.unpack_from('<4f', data, offset)        # 0-15:  tyresWear (floats, 0-100%)
+            d1 = struct.unpack_from('<4B', data, offset + 16)   # 16-19: tyresDamage
+            d2 = struct.unpack_from('<7B', data, offset + 20)   # 20-26: wings/floor/body/drsFault
+            # offset+27: ersFault (F1 24, skip)
+            d3 = struct.unpack_from('<8B', data, offset + 28)   # 28-35: gearBox,engine,MGUH/ES/CE/ICE/MGUK/TC wear
             return CarDamage(
                 tyres_wear=list(d0),
                 tyres_damage=list(d1),
@@ -511,14 +505,14 @@ class F1Decoder:
                 diffuser_damage=d2[4],
                 sidepod_damage=d2[5],
                 drs_fault=d2[6],
-                gear_box_damage=d2[7],
-                engine_damage=d2[8],
-                engine_mguh_wear=d2[9],
-                engine_es_wear=d2[10],
-                engine_ce_wear=d2[11],
-                engine_ice_wear=d2[12],
-                engine_mguk_wear=d2[13],
-                engine_tc_wear=d2[14],
+                gear_box_damage=d3[0],
+                engine_damage=d3[1],
+                engine_mguh_wear=d3[2],
+                engine_es_wear=d3[3],
+                engine_ce_wear=d3[4],
+                engine_ice_wear=d3[5],
+                engine_mguk_wear=d3[6],
+                engine_tc_wear=d3[7],
             )
         except Exception:
             return CarDamage()
@@ -574,9 +568,7 @@ class F1Decoder:
         }
 
         if frame.motion:
-            telem = frame.telemetry
             result["motion"] = {
-                "speed": telem.speed if telem is not None else 0,
                 "world_pos_x": frame.motion.world_pos_x,
                 "world_pos_y": frame.motion.world_pos_y,
                 "world_pos_z": frame.motion.world_pos_z,

@@ -52,11 +52,7 @@ function LiveDashboard() {
                 {formatTime([l?.sector1_time_ms, l?.sector2_time_ms, 0][i] || 0)}
               </span>
             </div>
-            <div className={`text-sm font-telemetry ${
-              l?.sector === i + 1 ? 'text-motorsport-orange' : 'text-motorsport-dim'
-            }`}>
-              {l?.sector === i + 1 ? '▶' : ''}
-            </div>
+
           </div>
         ))}
       </div>

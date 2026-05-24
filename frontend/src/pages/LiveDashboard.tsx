@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatTime, formatGear, formatSpeed } from '@/utils/formatters';
 import RPMBar from '@/components/RPMBar';
@@ -8,22 +8,38 @@ import TyreDisplay from '@/components/TyreDisplay';
 import DRSIndicator from '@/components/DRSIndicator';
 import ERSIndicator from '@/components/ERSIndicator';
 import { MiniTrackMap } from '@/components/TrackMapCanvas';
+import LiveTelemetryGraph from '@/components/LiveTelemetryGraph';
 
 export default function LiveDashboard() {
-  const { currentFrame, session } = useTelemetryStore();
-  
+  const { currentFrame, session, setSession } = useTelemetryStore();
+
   const t = currentFrame?.telemetry;
   const l = currentFrame?.lap;
   const s = currentFrame?.status;
   const m = currentFrame?.motion;
-  
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/session');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.session_id) setSession(data);
+        }
+      } catch {}
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, [setSession]);
+
   const speedKmh = useMemo(() => (t?.speed || 0), [t?.speed]);
   const gear = useMemo(() => (t?.gear || 0), [t?.gear]);
   const rpm = useMemo(() => (t?.engine_rpm || 0), [t?.engine_rpm]);
   const maxRpm = useMemo(() => 15000, []);
   
   return (
-    <div className="h-full flex flex-col gap-3 p-3 overflow-auto">
+    <div className="h-full flex flex-col gap-3 p-3 overflow-hidden">
       {/* Top Row - Speed, Gear, RPM, Lap Info */}
       <div className="grid grid-cols-12 gap-3 shrink-0">
         {/* Speed Display */}
@@ -52,18 +68,20 @@ export default function LiveDashboard() {
         {/* RPM & Throttle/Brake */}
         <div className="col-span-5 telemetry-panel p-4 flex flex-col gap-3 justify-center">
           <RPMBar rpm={rpm} maxRpm={maxRpm} />
-          <TelemetryGauge 
-            label="THROTTLE" 
-            value={t?.throttle || 0} 
-            max={1} 
+          <TelemetryGauge
+            label="THROTTLE"
+            value={(t?.throttle || 0) * 100}
+            max={100}
             color="#00e676"
+            unit="%"
             showBar
           />
-          <TelemetryGauge 
-            label="BRAKE" 
-            value={t?.brake || 0} 
-            max={1} 
+          <TelemetryGauge
+            label="BRAKE"
+            value={(t?.brake || 0) * 100}
+            max={100}
             color="#ff1744"
+            unit="%"
             showBar
           />
         </div>
@@ -76,7 +94,7 @@ export default function LiveDashboard() {
               {formatTime(l?.current_lap_time_ms || 0)}
             </div>
           </div>
-          
+
           <div className="grid grid-cols-2 gap-2 mt-2">
             <div>
               <span className="telemetry-label">LAST</span>
@@ -91,7 +109,7 @@ export default function LiveDashboard() {
               </div>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3 mt-2">
             <div className="flex items-center gap-1">
               <span className="text-xs text-motorsport-muted">POS</span>
@@ -110,6 +128,13 @@ export default function LiveDashboard() {
                 INVALID
               </span>
             )}
+            <div className="ml-auto flex items-center gap-1">
+              <span className="text-xs text-motorsport-muted">LAP</span>
+              <span className="font-telemetry text-lg font-bold text-motorsport-orange">
+                {l?.current_lap_num || '--'}
+                {session?.total_laps ? <span className="text-xs text-motorsport-muted font-normal">/{session.total_laps}</span> : null}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -149,10 +174,10 @@ export default function LiveDashboard() {
               color="#ff9100"
               precision={1}
             />
-            <TelemetryGauge 
-              label="LAPS LEFT" 
-              value={s?.fuel_remaining_laps || 0} 
-              max={50} 
+            <TelemetryGauge
+              label="LAPS LEFT"
+              value={s?.fuel_remaining_laps || 0}
+              max={100}
               color="#ff9100"
               precision={1}
             />
@@ -190,9 +215,9 @@ export default function LiveDashboard() {
         
         {/* Tyres */}
         <div className="col-span-2 telemetry-panel p-4">
-          <TyreDisplay 
+          <TyreDisplay
             temps={t?.tyres_surface_temp}
-            wear={s?.tyres_wear}
+            wear={currentFrame?.damage?.tyres_wear}
             pressures={t?.tyres_pressure}
             compound={s?.tyre_compound}
           />
@@ -200,10 +225,12 @@ export default function LiveDashboard() {
         
         {/* Mini Track Map */}
         <div className="col-span-2 telemetry-panel p-4">
-          <MiniTrackMap 
+          <MiniTrackMap
             posX={m?.world_pos_x}
-            posZ={m?.world_pos_y}
-            sessionTime={currentFrame?.session_time}
+            posZ={m?.world_pos_z}
+            lapNumber={l?.current_lap_num}
+            trackId={currentFrame?.session?.track_id}
+            sessionType={currentFrame?.session?.session_type}
           />
         </div>
       </div>
@@ -226,6 +253,9 @@ export default function LiveDashboard() {
           </div>
         ))}
       </div>
+
+      {/* Live telemetry graph — fills remaining space */}
+      <LiveTelemetryGraph />
     </div>
   );
 }

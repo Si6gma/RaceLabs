@@ -228,9 +228,6 @@ function LiveDashboard() {
           <ERSIndicator 
             storeEnergy={s?.ers_store_energy || 0}
             deployMode={s?.ers_deploy_mode || 0}
-            harvestedMGUK={s?.ers_harvested_this_lap_mguk || 0}
-            harvestedMGUH={s?.ers_harvested_this_lap_mguh || 0}
-            deployed={s?.ers_deployed_this_lap || 0}
           />
         </div>
         

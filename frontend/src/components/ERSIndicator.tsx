@@ -4,58 +4,62 @@ import { clamp } from '@/utils/formatters';
 interface ERSIndicatorProps {
   storeEnergy: number; // 0-4000000
   deployMode: number;
-  harvestedMGUK: number;
-  harvestedMGUH: number;
-  deployed: number;
 }
 
-function ERSIndicator({ 
-  storeEnergy = 0, 
+function ERSIndicator({
+  storeEnergy = 0,
   deployMode = 0,
-  harvestedMGUK = 0,
-  harvestedMGUH = 0,
-  deployed = 0
 }: ERSIndicatorProps) {
   const maxEnergy = 4000000;
   const percent = clamp((storeEnergy / maxEnergy) * 100, 0, 100);
-  
-  const modeNames = ['None', 'Low', 'Medium', 'High', 'Overtake', 'Hotlap'];
-  
+  const isOn = deployMode > 0;
+  const activeSegments = Math.ceil(percent / 10);
+
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex justify-between items-center">
+    <div className="flex flex-col gap-3 items-center">
+      {/* ERS Status Box — styled like DRS but yellow */}
+      <div className="flex flex-col items-center gap-1.5">
         <span className="telemetry-label">ERS</span>
-        <span className="text-xs font-bold text-motorsport-purple">{modeNames[deployMode] || 'None'}</span>
+        <div
+          className={`w-20 h-9 flex items-center justify-center rounded-sm border-2 font-bold text-sm tracking-wider transition-all duration-150 ${
+            isOn
+              ? 'bg-yellow-400/15 border-yellow-400 text-yellow-400 shadow-[0_0_12px_rgba(255,234,0,0.3)]'
+              : 'bg-motorsport-charcoal border-motorsport-border text-motorsport-dim'
+          }`}
+        >
+          {isOn ? 'ON' : 'OFF'}
+        </div>
+        <span className="text-[10px] text-motorsport-dim">
+          {isOn ? 'DEPLOYING' : 'STANDBY'}
+        </span>
       </div>
-      
-      {/* ERS Store Bar */}
-      <div className="relative h-4 bg-motorsport-charcoal rounded-sm overflow-hidden">
-        <div 
-          className="absolute inset-y-0 left-0 rounded-sm transition-all duration-200"
-          style={{ 
-            width: `${percent}%`,
-            background: `linear-gradient(90deg, #7c4dff, #d500f9)`,
-          }}
-        />
-        <div className="absolute inset-0 flex items-center justify-center">
-          <span className="text-[10px] font-bold text-white drop-shadow-md">
+
+      {/* Segmented Battery Bar — 10 black-increment blocks */}
+      <div className="w-full">
+        <div className="flex gap-0.5 h-4">
+          {Array.from({ length: 10 }).map((_, i) => {
+            const filled = i < activeSegments;
+            const isFirst = i === 0;
+            const isLast = i === 9;
+            return (
+              <div
+                key={i}
+                className={`flex-1 rounded-sm transition-colors duration-150 ${
+                  filled
+                    ? 'bg-yellow-400'
+                    : 'bg-motorsport-black'
+                }`}
+                style={{
+                  borderRadius: isFirst ? '3px 0 0 3px' : isLast ? '0 3px 3px 0' : '0',
+                }}
+              />
+            );
+          })}
+        </div>
+        <div className="text-center mt-1">
+          <span className="font-telemetry text-[10px] text-yellow-400 tabular-nums">
             {percent.toFixed(0)}%
           </span>
-        </div>
-      </div>
-      
-      <div className="grid grid-cols-3 gap-2">
-        <div className="text-center">
-          <div className="text-[10px] text-motorsport-muted">MGUK</div>
-          <div className="font-telemetry text-xs text-motorsport-green">+{(harvestedMGUK/1000).toFixed(1)}</div>
-        </div>
-        <div className="text-center">
-          <div className="text-[10px] text-motorsport-muted">MGUH</div>
-          <div className="font-telemetry text-xs text-motorsport-green">+{(harvestedMGUH/1000).toFixed(1)}</div>
-        </div>
-        <div className="text-center">
-          <div className="text-[10px] text-motorsport-muted">USED</div>
-          <div className="font-telemetry text-xs text-motorsport-red">-{(deployed/1000).toFixed(1)}</div>
         </div>
       </div>
     </div>

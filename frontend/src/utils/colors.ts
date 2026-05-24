@@ -54,3 +54,47 @@ export function getWearColor(wear: number): string {
   if (wear < 70) return '#ff6b00';
   return '#ff1744';
 }
+
+/** Green → Yellow → Red heat map. t is 0..1 where 0=safe, 1=danger. */
+function heatGradient(t: number): string {
+  const clamped = Math.max(0, Math.min(1, t));
+  if (clamped < 0.5) {
+    // green (#00e676) → yellow (#ffea00)
+    const p = clamped * 2;
+    const r = Math.round(0 + (255 - 0) * p);
+    const g = Math.round(230 + (234 - 230) * p);
+    const b = Math.round(118 + (0 - 118) * p);
+    return `rgb(${r},${g},${b})`;
+  }
+  // yellow (#ffea00) → red (#ff1744)
+  const p = (clamped - 0.5) * 2;
+  const r = Math.round(255 + (255 - 255) * p);
+  const g = Math.round(234 + (23 - 234) * p);
+  const b = Math.round(0 + (68 - 0) * p);
+  return `rgb(${r},${g},${b})`;
+}
+
+/**
+ * Returns a heat-map colour for telemetry gauges.
+ * @param value    current reading
+ * @param safe     threshold where things are green
+ * @param danger   threshold where things are red
+ * @param mode     'ascending' = high values are bad (temp, g-force)
+ *                 'descending' = low values are bad (fuel, laps)
+ */
+export function getHeatColor(
+  value: number,
+  safe: number,
+  danger: number,
+  mode: 'ascending' | 'descending' = 'ascending'
+): string {
+  if (mode === 'ascending') {
+    if (value <= safe) return '#00e676';
+    if (value >= danger) return '#ff1744';
+    return heatGradient((value - safe) / (danger - safe));
+  }
+  // descending: low is bad
+  if (value >= safe) return '#00e676';
+  if (value <= danger) return '#ff1744';
+  return heatGradient((safe - value) / (safe - danger));
+}

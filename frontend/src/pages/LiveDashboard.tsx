@@ -1,6 +1,7 @@
 import { memo, useMemo, useEffect } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatTime, formatGear, formatSpeed } from '@/utils/formatters';
+import { getHeatColor } from '@/utils/colors';
 import RPMBar from '@/components/RPMBar';
 import TelemetryGauge from '@/components/TelemetryGauge';
 import SteeringWheel from '@/components/SteeringWheel';
@@ -170,14 +171,14 @@ function LiveDashboard() {
               label="LAT G" 
               value={Math.abs(m?.g_force_lat || 0)} 
               max={3.5} 
-              color="#ff6b00"
+              color={getHeatColor(Math.abs(m?.g_force_lat || 0), 1.5, 2.8, 'ascending')}
               precision={2}
             />
             <TelemetryGauge 
               label="LON G" 
               value={Math.abs(m?.g_force_lon || 0)} 
               max={3.5} 
-              color="#ff6b00"
+              color={getHeatColor(Math.abs(m?.g_force_lon || 0), 1.5, 2.8, 'ascending')}
               precision={2}
             />
           </div>
@@ -188,14 +189,14 @@ function LiveDashboard() {
               value={s?.fuel_in_tank || 0} 
               max={s?.fuel_capacity || 110} 
               unit="kg"
-              color="#ff9100"
+              color={getHeatColor(s?.fuel_in_tank || 0, 80, 30, 'descending')}
               precision={1}
             />
             <TelemetryGauge
               label="LAPS LEFT"
               value={s?.fuel_remaining_laps || 0}
               max={100}
-              color="#ff9100"
+              color={getHeatColor(s?.fuel_remaining_laps || 0, 25, 8, 'descending')}
               precision={1}
             />
           </div>
@@ -206,14 +207,17 @@ function LiveDashboard() {
               value={t?.engine_temp || 0} 
               max={150} 
               unit="°C"
-              color="#ff1744"
+              color={getHeatColor(t?.engine_temp || 0, 105, 125, 'ascending')}
             />
             <TelemetryGauge 
               label="BRAKE TEMP AVG" 
               value={t?.brakes_temp ? t.brakes_temp.reduce((a,b) => a+b, 0) / 4 : 0} 
               max={1200} 
               unit="°C"
-              color="#ff1744"
+              color={getHeatColor(
+                t?.brakes_temp ? t.brakes_temp.reduce((a,b) => a+b, 0) / 4 : 0,
+                500, 950, 'ascending'
+              )}
             />
           </div>
         </div>

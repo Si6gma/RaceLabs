@@ -6,12 +6,18 @@ interface LapTrace {
   color: string;
 }
 
+interface CurrentPoint {
+  point: TelemetryPoint;
+  color: string;
+}
+
 interface Props {
   laps: LapTrace[];
   currentPoint?: TelemetryPoint | null;
+  currentPoints?: CurrentPoint[];
 }
 
-export default function TrackMapViewer({ laps, currentPoint }: Props) {
+export default function TrackMapViewer({ laps, currentPoint, currentPoints }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawRef = useRef<() => void>(() => {});
   const rafRef = useRef<number | null>(null);
@@ -49,7 +55,7 @@ export default function TrackMapViewer({ laps, currentPoint }: Props) {
       const H = rect.height;
       ctx.clearRect(0, 0, W, H);
 
-      // F1 coordinate system: X = lateral, Y = longitudinal (ground plane), Z = altitude.
+      // Ground plane convention (both CSV and normalised live frames): X = lateral, Y = longitudinal, Z = altitude.
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       laps.forEach(({ data }) => {
         data.forEach(s => {
@@ -95,18 +101,19 @@ export default function TrackMapViewer({ laps, currentPoint }: Props) {
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // Current-point dot — drawn in screen space so it's always 5px radius
-      if (currentPoint) {
-        const sx = (currentPoint.world_position_x - cx) * S + W / 2 + panX;
-        const sy = (currentPoint.world_position_y - cy) * S + H / 2 + panY;
-        ctx.fillStyle = '#fff';
+      // Current-point dots — drawn in screen space so they're always 5px radius
+      const pointsToDraw: CurrentPoint[] = currentPoints ?? (currentPoint ? [{ point: currentPoint, color: '#fff' }] : []);
+      pointsToDraw.forEach(({ point, color }) => {
+        const sx = (point.world_position_x - cx) * S + W / 2 + panX;
+        const sy = (point.world_position_y - cy) * S + H / 2 + panY;
+        ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(sx, sy, 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = '#111';
         ctx.lineWidth = 1.5;
         ctx.stroke();
-      }
+      });
 
       // Zoom-reset hint when zoomed in
       if (uScale !== 1 || panX !== 0 || panY !== 0) {

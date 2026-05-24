@@ -38,7 +38,7 @@ interface Props {
   laps: LapData[];
   visibleChannels: Set<string>;
   zoomRange: [number, number];
-  effectiveIndex: number;
+  effectivePosition: number;
   cursorLocked: boolean;
 }
 
@@ -46,13 +46,13 @@ export default function TelemetryGraphCanvas({
   laps,
   visibleChannels,
   zoomRange,
-  effectiveIndex,
+  effectivePosition,
   cursorLocked,
 }: Props) {
   const dataCanvasRef = useRef<HTMLCanvasElement>(null);
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Data layer — traces, grid, labels, zoom bar, x-axis distance ticks
+  // Data layer — traces, grid, labels
   useEffect(() => {
     const canvas = dataCanvasRef.current;
     if (!canvas || laps.length === 0) return;
@@ -76,7 +76,7 @@ export default function TelemetryGraphCanvas({
       ctx.clearRect(0, 0, width, height);
 
       const [zStart, zEnd] = zoomRange;
-      const zoomSamples = Math.max(1, zEnd - zStart);
+      const posSpan = Math.max(1e-9, zEnd - zStart);
 
       // Grid lines
       ctx.strokeStyle = '#1e293b';
@@ -89,16 +89,30 @@ export default function TelemetryGraphCanvas({
         ctx.stroke();
       }
 
-      // Channel traces
+      // Channel traces — drawn using normalized_track_position as X domain
       CHANNELS.forEach(ch => {
         if (!visibleChannels.has(ch.key as string)) return;
         laps.forEach(lap => {
           const samples = lap.data;
           if (samples.length < 2) return;
 
-          const xScale = graphWidth / zoomSamples;
-          const startI = Math.max(0, Math.floor(zStart));
-          const endI = Math.min(samples.length - 1, Math.ceil(zEnd));
+          // Find visible sample range by position
+          let startI = 0;
+          let endI = samples.length - 1;
+          for (let i = 0; i < samples.length; i++) {
+            if (samples[i].normalized_track_position >= zStart) {
+              startI = Math.max(0, i - 1);
+              break;
+            }
+          }
+          for (let i = samples.length - 1; i >= 0; i--) {
+            if (samples[i].normalized_track_position <= zEnd) {
+              endI = Math.min(samples.length - 1, i + 1);
+              break;
+            }
+          }
+
+          const xScale = graphWidth / posSpan;
 
           ctx.strokeStyle = ch.color;
           ctx.lineWidth = ch.key === 'speed_kmh' || ch.key === 'rpm' ? 1.5 : 1;
@@ -107,33 +121,49 @@ export default function TelemetryGraphCanvas({
             : ch.key === 'delta_time' ? 0.6
             : 0.9;
 
-          ctx.beginPath();
-          let first = true;
+          const pts: [number, number][] = [];
           for (let i = startI; i <= endI; i++) {
             const s = samples[i];
             const val = s[ch.key] as number;
-            const x = PAD.left + (i - zStart) * xScale;
+            const x = PAD.left + (s.normalized_track_position - zStart) * xScale;
             const normalized = (val - ch.min) / (ch.max - ch.min);
             const y = PAD.top + graphHeight * ch.offset + graphHeight * ch.scale * (1 - normalized);
-            if (first) { ctx.moveTo(x, y); first = false; }
-            else ctx.lineTo(x, y);
+            pts.push([x, y]);
+          }
+
+          ctx.beginPath();
+          if (pts.length >= 2) {
+            ctx.moveTo(pts[0][0], pts[0][1]);
+            for (let i = 0; i < pts.length - 1; i++) {
+              const p0 = pts[Math.max(0, i - 1)];
+              const p1 = pts[i];
+              const p2 = pts[i + 1];
+              const p3 = pts[Math.min(pts.length - 1, i + 2)];
+              const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+              const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+              const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+              const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+              ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
+            }
           }
           ctx.stroke();
           ctx.globalAlpha = 1;
         });
       });
 
-      // X-axis distance labels — use the longest lap so the axis matches the zoom range
-      const refLap = laps.reduce((best, l) => l.data.length > best.data.length ? l : best, laps[0]);
+      // X-axis distance labels — use the first lap as reference
+      const refLap = laps[0];
       if (refLap && refLap.data.length > 0) {
         ctx.fillStyle = '#475569';
         ctx.font = '9px monospace';
         ctx.textAlign = 'center';
         const numTicks = 6;
         for (let t = 0; t <= numTicks; t++) {
+          const targetPos = zStart + (t / numTicks) * posSpan;
+          // Find sample closest to this position for distance label
           const idx = Math.max(0, Math.min(
             refLap.data.length - 1,
-            Math.floor(zStart + (t / numTicks) * zoomSamples)
+            Math.round(targetPos * (refLap.data.length - 1))
           ));
           const dist = refLap.data[idx]?.cumulative_distance ?? 0;
           const x = PAD.left + (t / numTicks) * graphWidth;
@@ -168,7 +198,7 @@ export default function TelemetryGraphCanvas({
     return () => observer.disconnect();
   }, [laps, visibleChannels, zoomRange]);
 
-  // Cursor overlay — just the vertical line, redraws on every hover
+  // Cursor overlay — vertical line at effectivePosition
   useEffect(() => {
     const canvas = cursorCanvasRef.current;
     if (!canvas) return;
@@ -191,10 +221,10 @@ export default function TelemetryGraphCanvas({
       ctx.clearRect(0, 0, width, height);
 
       const [zStart, zEnd] = zoomRange;
-      const zoomSamples = Math.max(1, zEnd - zStart);
+      const posSpan = Math.max(1e-9, zEnd - zStart);
 
-      if (effectiveIndex >= zStart && effectiveIndex <= zEnd) {
-        const x = PAD.left + (effectiveIndex - zStart) * (graphWidth / zoomSamples);
+      if (effectivePosition >= zStart && effectivePosition <= zEnd) {
+        const x = PAD.left + (effectivePosition - zStart) / posSpan * graphWidth;
         ctx.strokeStyle = cursorLocked ? '#fff' : 'rgba(255,255,255,0.5)';
         ctx.lineWidth = 1;
         ctx.setLineDash(cursorLocked ? [4, 4] : [2, 6]);
@@ -210,7 +240,7 @@ export default function TelemetryGraphCanvas({
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [effectiveIndex, cursorLocked, zoomRange]);
+  }, [effectivePosition, cursorLocked, zoomRange]);
 
   return (
     <div className="relative w-full h-full">

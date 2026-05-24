@@ -5,9 +5,10 @@ import {
   ArrowLeft, MapPin, Layers, Download, Activity,
   BarChart3, Map as MapIcon, SlidersHorizontal, Lock, Unlock
 } from 'lucide-react';
-import type { TelemetrySample, ImportedLap, ImportedSession } from '@/types/telemetry';
+import type { ImportedLap, ImportedSession } from '@/types/telemetry';
 import TelemetryGraphCanvas, { CHANNELS, DEFAULT_VISIBLE } from '@/components/TelemetryGraphCanvas';
 import TrackMapViewer from '@/components/TrackMapViewer';
+import ZoomRangeBar from '@/components/ZoomRangeBar';
 import { normalizeImportedSamples, normalizeLiveFrames, type TelemetryPoint } from '@/utils/telemetryAdapter';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
@@ -47,7 +48,7 @@ export default function SessionViewer() {
   const [laps, setLaps] = useState<UnifiedLap[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLaps, setSelectedLaps] = useState<Set<number>>(new Set());
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentPosition, setCurrentPosition] = useState(0);
   const [currentLapIndex, setCurrentLapIndex] = useState(0);
 
   const [viewMode, setViewMode] = useState<'graph' | 'track'>('graph');
@@ -55,8 +56,8 @@ export default function SessionViewer() {
   const [filterOpen, setFilterOpen] = useState(false);
 
   const [cursorLocked, setCursorLocked] = useState(false);
-  const [hoverIndex, setHoverIndex] = useState(0);
-  const hoverIndexRef = useRef(0);
+  const [hoverPosition, setHoverPosition] = useState(0);
+  const hoverPositionRef = useRef(0);
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
 
   const [zoomRange, setZoomRange] = useState<[number, number]>([0, 1]);
@@ -105,11 +106,18 @@ export default function SessionViewer() {
 
       const lapData = await Promise.all(
         data.laps.map(async (lap, i) => {
-          const telemRes = await fetch(`${API_URL}/api/import/laps/${lap.id}/telemetry`);
-          let samples: TelemetrySample[] = [];
-          if (telemRes.ok) {
-            const telem = await telemRes.json();
-            samples = telem.samples;
+          // Try resampled first, fall back to raw telemetry
+          let samples: TelemetryPoint[] = [];
+          const resampledRes = await fetch(`${API_URL}/api/import/laps/${lap.id}/resampled`);
+          if (resampledRes.ok) {
+            const telem = await resampledRes.json();
+            samples = telem.samples as TelemetryPoint[];
+          } else {
+            const rawRes = await fetch(`${API_URL}/api/import/laps/${lap.id}/telemetry`);
+            if (rawRes.ok) {
+              const telem = await rawRes.json();
+              samples = normalizeImportedSamples(telem.samples);
+            }
           }
           return {
             id: lap.id,
@@ -118,7 +126,7 @@ export default function SessionViewer() {
             valid: lap.valid,
             maxSpeed: lap.max_speed,
             sampleCount: samples.length,
-            samples: normalizeImportedSamples(samples),
+            samples,
             color: LAP_COLORS[i % LAP_COLORS.length],
           };
         })
@@ -202,52 +210,51 @@ export default function SessionViewer() {
     return indices.map(i => laps[i]).filter(Boolean);
   }, [selectedLaps, laps]);
 
-  // Total sample range — based on the longest selected lap so all laps stay fully visible
-  const maxSamples = useMemo(
-    () => selectedLapData.length === 0 ? 0 : Math.max(...selectedLapData.map(l => l.samples.length)),
-    [selectedLapData],
-  );
-
-  const effectiveIndex = cursorLocked ? currentIndex : hoverIndex;
+  const effectivePosition = cursorLocked ? currentPosition : hoverPosition;
 
   const currentSample = useMemo(() => {
     if (selectedLapData.length === 0) return null;
     const lap = selectedLapData[currentLapIndex % selectedLapData.length];
-    if (!lap || !lap.samples[effectiveIndex]) return null;
-    return lap.samples[effectiveIndex];
-  }, [selectedLapData, currentLapIndex, effectiveIndex]);
+    if (!lap || lap.samples.length === 0) return null;
+    const idx = Math.max(0, Math.min(lap.samples.length - 1, Math.round(effectivePosition * (lap.samples.length - 1))));
+    return lap.samples[idx];
+  }, [selectedLapData, currentLapIndex, effectivePosition]);
 
-  // Reset zoom when selected laps change — use the longest lap so all laps stay visible
+  const currentPoints = useMemo(() => {
+    return selectedLapData.map(lap => {
+      if (!lap.samples.length) return null;
+      const idx = Math.max(0, Math.min(lap.samples.length - 1, Math.round(effectivePosition * (lap.samples.length - 1))));
+      return { point: lap.samples[idx], color: lap.color };
+    }).filter(Boolean) as Array<{ point: TelemetryPoint; color: string }>;
+  }, [selectedLapData, effectivePosition]);
+
+  // Reset zoom when selected laps change
   useEffect(() => {
     if (selectedLapData.length === 0) return;
-    const maxLen = Math.max(...selectedLapData.map(l => l.samples.length));
-    if (maxLen > 1) {
-      setZoomRange([0, maxLen - 1]);
-      setCurrentIndex(0);
-      setHoverIndex(0);
-      hoverIndexRef.current = 0;
-      setCursorLocked(false);
-    }
+    setZoomRange([0, 1]);
+    setCurrentPosition(0);
+    setHoverPosition(0);
+    hoverPositionRef.current = 0;
+    setCursorLocked(false);
   }, [selectedLapData.map(l => l.id).join(',')]);
 
-  const getSampleIndexFromX = useCallback((clientX: number): number => {
+  const getPositionFromX = useCallback((clientX: number): number => {
     const container = graphContainerRef.current;
-    if (!container || maxSamples === 0) return 0;
+    if (!container) return 0;
     const rect = container.getBoundingClientRect();
     const x = clientX - rect.left;
     const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
     const [zStart, zEnd] = zoomRange;
-    const zoomSamples = Math.max(1, zEnd - zStart);
+    const posSpan = Math.max(1e-9, zEnd - zStart);
     const ratio = Math.max(0, Math.min(1, (x - padding.left) / graphWidth));
-    return Math.max(0, Math.min(maxSamples - 1, Math.floor(zStart + ratio * zoomSamples)));
-  }, [maxSamples, zoomRange]);
+    return zStart + ratio * posSpan;
+  }, [zoomRange]);
 
   // Graph wheel zoom — stored in ref so the non-passive listener always has current values
   const graphWheelRef = useRef<(e: WheelEvent) => void>(() => {});
   useEffect(() => {
     graphWheelRef.current = (e: WheelEvent) => {
-      if (maxSamples < 2) return;
       e.preventDefault();
 
       const container = graphContainerRef.current;
@@ -259,19 +266,19 @@ export default function SessionViewer() {
       const ratio = Math.max(0, Math.min(1, (mouseX - padding.left) / graphWidth));
 
       const [zStart, zEnd] = zoomRange;
-      const zoomSamples = zEnd - zStart;
-      const total = maxSamples - 1;
+      const zoomSpan = zEnd - zStart;
+      const total = 1.0;
 
       const factor = e.deltaY < 0 ? 0.85 : 1.15;
-      let newZoom = Math.max(20, Math.min(total, zoomSamples * factor));
-      const center = zStart + ratio * zoomSamples;
+      let newZoom = Math.max(0.005, Math.min(total, zoomSpan * factor));
+      const center = zStart + ratio * zoomSpan;
       let newStart = center - ratio * newZoom;
       let newEnd = newStart + newZoom;
       if (newStart < 0) { newStart = 0; newEnd = newZoom; }
       if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - newZoom); }
       setZoomRange([newStart, newEnd]);
     };
-  }, [maxSamples, zoomRange]);
+  }, [zoomRange]);
 
   // Attach non-passive wheel listener so e.preventDefault() actually suppresses page scroll
   useEffect(() => {
@@ -292,9 +299,9 @@ export default function SessionViewer() {
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging.current) {
-      const clamped = getSampleIndexFromX(e.clientX);
-      hoverIndexRef.current = clamped;
-      setHoverIndex(clamped);
+      const clamped = getPositionFromX(e.clientX);
+      hoverPositionRef.current = clamped;
+      setHoverPosition(clamped);
       const container = graphContainerRef.current;
       if (container) {
         const rect = container.getBoundingClientRect();
@@ -307,29 +314,29 @@ export default function SessionViewer() {
     if (dx > 4) hasDragged.current = true;
 
     const container = graphContainerRef.current;
-    if (!container || maxSamples === 0) return;
+    if (!container) return;
     const rect = container.getBoundingClientRect();
     const padding = { left: 50, right: 60 };
     const graphWidth = rect.width - padding.left - padding.right;
 
     const [ds, de] = dragStartZoom.current;
-    const zoomSamples = de - ds;
-    const total = maxSamples - 1;
-    const sampleShift = -(dx * Math.sign(e.clientX - dragStartX.current) / graphWidth) * zoomSamples;
+    const zoomSpan = de - ds;
+    const total = 1.0;
+    const positionShift = -(dx * Math.sign(e.clientX - dragStartX.current) / graphWidth) * zoomSpan;
 
-    let newStart = ds + sampleShift;
-    let newEnd = de + sampleShift;
-    if (newStart < 0) { newStart = 0; newEnd = zoomSamples; }
-    if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - zoomSamples); }
+    let newStart = ds + positionShift;
+    let newEnd = de + positionShift;
+    if (newStart < 0) { newStart = 0; newEnd = zoomSpan; }
+    if (newEnd > total) { newEnd = total; newStart = Math.max(0, total - zoomSpan); }
     setZoomRange([newStart, newEnd]);
-  }, [maxSamples, getSampleIndexFromX]);
+  }, [getPositionFromX]);
 
   const handleMouseUp = useCallback(() => {
     if (isDragging.current && !hasDragged.current) {
       if (cursorLocked) {
         setCursorLocked(false);
       } else {
-        setCurrentIndex(hoverIndexRef.current);
+        setCurrentPosition(hoverPositionRef.current);
         setCursorLocked(true);
       }
     }
@@ -424,9 +431,9 @@ export default function SessionViewer() {
                   else newSet.add(idx);
                   setSelectedLaps(newSet);
                   setCurrentLapIndex(idx);
-                  setCurrentIndex(0);
-                  setHoverIndex(0);
-                  hoverIndexRef.current = 0;
+                  setCurrentPosition(0);
+                  setHoverPosition(0);
+                  hoverPositionRef.current = 0;
                   setCursorLocked(false);
                 }}
                 className={`w-full text-left px-2.5 py-2 rounded text-xs transition-all ${
@@ -596,7 +603,7 @@ export default function SessionViewer() {
               laps={selectedLapData.map(l => ({ data: l.samples, color: l.color }))}
               visibleChannels={visibleChannels}
               zoomRange={zoomRange}
-              effectiveIndex={effectiveIndex}
+              effectivePosition={effectivePosition}
               cursorLocked={cursorLocked}
             />
 
@@ -609,15 +616,15 @@ export default function SessionViewer() {
                 y={hoverPos.y}
                 containerRef={graphContainerRef}
                 laps={selectedLapData}
-                effectiveIndex={effectiveIndex}
+                effectivePosition={effectivePosition}
               />
             )}
           </div>
 
           {/* Zoom range bar — shows when in graph mode and data is loaded */}
-          {viewMode === 'graph' && maxSamples > 1 && (
+          {viewMode === 'graph' && selectedLapData.length > 0 && (
             <ZoomRangeBar
-              total={maxSamples - 1}
+              total={1.0}
               zoomRange={zoomRange}
               onZoomChange={setZoomRange}
             />
@@ -633,6 +640,7 @@ export default function SessionViewer() {
               <TrackMapViewer
                 laps={selectedLapData.map(lap => ({ data: lap.samples, color: lap.color }))}
                 currentPoint={currentSample}
+                currentPoints={currentPoints}
               />
             </div>
             {selectedLapData.length > 1 && (
@@ -664,108 +672,6 @@ export default function SessionViewer() {
   );
 }
 
-interface ZoomRangeBarProps {
-  total: number;
-  zoomRange: [number, number];
-  onZoomChange: (r: [number, number]) => void;
-}
-
-function ZoomRangeBar({ total, zoomRange, onZoomChange }: ZoomRangeBarProps) {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef<'left' | 'right' | 'mid' | null>(null);
-  const dragStart = useRef({ x: 0, zoomRange: [0, total] as [number, number] });
-
-  const [zStart, zEnd] = zoomRange;
-  const leftPct = (zStart / total) * 100;
-  const rightPct = (zEnd / total) * 100;
-  const isFullRange = zStart === 0 && zEnd === total;
-
-  const getT = (clientX: number) => {
-    const rect = trackRef.current?.getBoundingClientRect();
-    if (!rect) return 0;
-    return Math.max(0, Math.min(total, ((clientX - rect.left) / rect.width) * total));
-  };
-
-  const onMouseDown = (e: React.MouseEvent, which: 'left' | 'right' | 'mid') => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragging.current = which;
-    dragStart.current = { x: e.clientX, zoomRange: [...zoomRange] as [number, number] };
-
-    const onMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const [ds, de] = dragStart.current.zoomRange;
-      const span = de - ds;
-
-      if (dragging.current === 'left') {
-        const t = getT(ev.clientX);
-        onZoomChange([Math.min(t, de - 20), de]);
-      } else if (dragging.current === 'right') {
-        const t = getT(ev.clientX);
-        onZoomChange([ds, Math.max(t, ds + 20)]);
-      } else {
-        const rect = trackRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const dx = ((ev.clientX - dragStart.current.x) / rect.width) * total;
-        let ns = ds + dx;
-        let ne = de + dx;
-        if (ns < 0) { ns = 0; ne = span; }
-        if (ne > total) { ne = total; ns = total - span; }
-        onZoomChange([ns, ne]);
-      }
-    };
-    const onUp = () => {
-      dragging.current = null;
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
-  const handleTrackClick = (e: React.MouseEvent) => {
-    if (dragging.current) return;
-    const t = getT(e.clientX);
-    const span = zEnd - zStart;
-    let ns = t - span / 2;
-    let ne = t + span / 2;
-    if (ns < 0) { ns = 0; ne = span; }
-    if (ne > total) { ne = total; ns = total - span; }
-    onZoomChange([ns, ne]);
-  };
-
-  return (
-    <div className="shrink-0 px-1 py-1.5">
-      <div
-        ref={trackRef}
-        className="relative h-3 rounded-full bg-motorsport-surface cursor-pointer select-none"
-        onClick={handleTrackClick}
-      >
-        {/* Filled region */}
-        <div
-          className={`absolute inset-y-0 rounded-full ${isFullRange ? 'bg-motorsport-border' : 'bg-motorsport-blue/40'}`}
-          style={{ left: `${leftPct}%`, right: `${100 - rightPct}%` }}
-          onMouseDown={isFullRange ? undefined : (e) => onMouseDown(e, 'mid')}
-          onClick={(e) => e.stopPropagation()}
-        />
-        {/* Left handle */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-motorsport-blue border-2 border-motorsport-charcoal cursor-ew-resize shadow-sm"
-          style={{ left: `calc(${leftPct}% - 6px)` }}
-          onMouseDown={(e) => onMouseDown(e, 'left')}
-          onClick={(e) => e.stopPropagation()}
-        />
-        {/* Right handle */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-motorsport-blue border-2 border-motorsport-charcoal cursor-ew-resize shadow-sm"
-          style={{ left: `calc(${rightPct}% - 6px)` }}
-          onMouseDown={(e) => onMouseDown(e, 'right')}
-          onClick={(e) => e.stopPropagation()}
-        />
-      </div>
-    </div>
-  );
-}
 
 interface HoverTooltipProps {
   sample: TelemetryPoint;
@@ -774,10 +680,10 @@ interface HoverTooltipProps {
   y: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
   laps: UnifiedLap[];
-  effectiveIndex: number;
+  effectivePosition: number;
 }
 
-function HoverTooltip({ sample, visibleChannels, x, y, containerRef, laps, effectiveIndex }: HoverTooltipProps) {
+function HoverTooltip({ sample, visibleChannels, x, y, containerRef, laps, effectivePosition }: HoverTooltipProps) {
   const TOOLTIP_W = 160;
   const TOOLTIP_H_EST = 200;
   const OFFSET = 14;
@@ -800,7 +706,7 @@ function HoverTooltip({ sample, visibleChannels, x, y, containerRef, laps, effec
       <div className="text-[10px] text-motorsport-muted mb-2 border-b border-motorsport-border pb-1.5 flex items-center justify-between">
         <span className="font-telemetry">{distLabel}</span>
         {laps.length > 1 && (
-          <span className="text-[9px] text-motorsport-dim">#{effectiveIndex}</span>
+          <span className="text-[9px] text-motorsport-dim">{(effectivePosition * 100).toFixed(1)}%</span>
         )}
       </div>
       <div className="space-y-1.5">
@@ -823,7 +729,8 @@ function HoverTooltip({ sample, visibleChannels, x, y, containerRef, laps, effec
       {laps.length > 1 && (
         <div className="mt-2 pt-1.5 border-t border-motorsport-border space-y-1">
           {laps.map((lap) => {
-            const s = lap.samples[effectiveIndex];
+            const idx = Math.max(0, Math.min(lap.samples.length - 1, Math.round(effectivePosition * (lap.samples.length - 1))));
+            const s = lap.samples[idx];
             if (!s) return null;
             const spd = s.speed_kmh ?? 0;
             return (

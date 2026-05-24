@@ -371,17 +371,21 @@ def normalize_telemetry_data(raw_rows: List[Dict[str, Any]], track_length: float
     
     # Step 4: Compute per-lap metrics
     for lap in laps:
-        # Compute track position
+        # Strip sentinel -1 position samples (invalid GPS bins before the car leaves the garage).
+        # These corrupt cumulative distance and produce spikes to (-1,-1) in the track map.
+        pos_valid = [s for s in lap.samples if s.world_position_x != -1]
+        samples_for_metrics = pos_valid if pos_valid else lap.samples
+        lap.samples = samples_for_metrics
+
         lap_track_length = track_length
-        if lap_track_length <= 0 and len(lap.samples) > 1:
-            # Estimate track length from cumulative distance
-            compute_cumulative_distance(lap.samples)
-            lap_track_length = lap.samples[-1].cumulative_distance if lap.samples else 0
-        
-        compute_normalized_track_position(lap.samples, lap_track_length)
-        compute_trajectory_curvature(lap.samples)
-        detect_sectors(lap.samples)
-        compute_delta_times(lap.samples, best_lap.samples if best_lap else None)
+        if lap_track_length <= 0 and len(samples_for_metrics) > 1:
+            compute_cumulative_distance(samples_for_metrics)
+            lap_track_length = samples_for_metrics[-1].cumulative_distance if samples_for_metrics else 0
+
+        compute_normalized_track_position(samples_for_metrics, lap_track_length)
+        compute_trajectory_curvature(samples_for_metrics)
+        detect_sectors(samples_for_metrics)
+        compute_delta_times(samples_for_metrics, best_lap.samples if best_lap else None)
     
     # Session metadata
     car_ids = set(s.raw.get("carId") for s in samples if s.raw.get("carId"))

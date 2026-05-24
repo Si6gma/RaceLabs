@@ -42,6 +42,25 @@ function LiveDashboard() {
   
   return (
     <div className="h-full flex flex-col gap-3 p-3 overflow-hidden">
+      {/* Sector Times */}
+      <div className="grid grid-cols-3 gap-3 shrink-0">
+        {['S1', 'S2', 'S3'].map((sector, i) => (
+          <div key={sector} className="telemetry-panel p-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-bold text-motorsport-muted">{sector}</span>
+              <span className="font-telemetry text-xl">
+                {formatTime([l?.sector1_time_ms, l?.sector2_time_ms, 0][i] || 0)}
+              </span>
+            </div>
+            <div className={`text-sm font-telemetry ${
+              l?.sector === i + 1 ? 'text-motorsport-orange' : 'text-motorsport-dim'
+            }`}>
+              {l?.sector === i + 1 ? '▶' : ''}
+            </div>
+          </div>
+        ))}
+      </div>
+
       {/* Top Row - Speed, Gear, RPM, Lap Info */}
       <div className="grid grid-cols-12 gap-3 shrink-0">
         {/* Speed Display */}
@@ -237,25 +256,6 @@ function LiveDashboard() {
         </div>
       </div>
       
-      {/* Bottom - Sector Times */}
-      <div className="grid grid-cols-3 gap-3 shrink-0">
-        {['S1', 'S2', 'S3'].map((sector, i) => (
-          <div key={sector} className="telemetry-panel p-3 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-bold text-motorsport-muted">{sector}</span>
-              <span className="font-telemetry text-xl">
-                {formatTime([l?.sector1_time_ms, l?.sector2_time_ms, 0][i] || 0)}
-              </span>
-            </div>
-            <div className={`text-sm font-telemetry ${
-              l?.sector === i + 1 ? 'text-motorsport-orange' : 'text-motorsport-dim'
-            }`}>
-              {l?.sector === i + 1 ? '▶' : ''}
-            </div>
-          </div>
-        ))}
-      </div>
-
       {/* Live telemetry graph — fills remaining space */}
       <LiveTelemetryGraph />
     </div>

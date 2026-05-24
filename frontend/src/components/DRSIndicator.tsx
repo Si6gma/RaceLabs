@@ -8,7 +8,6 @@ interface DRSIndicatorProps {
 function DRSIndicator({ active, allowed }: DRSIndicatorProps) {
   return (
     <div className="flex flex-col items-center gap-1.5">
-      <span className="telemetry-label">DRS</span>
       <div 
         className={`w-16 h-8 flex items-center justify-center rounded-sm border-2 font-bold text-sm tracking-wider transition-all duration-150 ${
           active 

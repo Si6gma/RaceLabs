@@ -223,7 +223,7 @@ function LiveDashboard() {
         </div>
         
         {/* DRS & ERS */}
-        <div className="col-span-2 telemetry-panel p-4 flex flex-col gap-4">
+        <div className="col-span-2 telemetry-panel p-4 flex flex-row gap-3 items-center justify-center">
           <DRSIndicator active={t?.drs === 1} allowed={s?.drs_allowed === 1} />
           <ERSIndicator 
             storeEnergy={s?.ers_store_energy || 0}

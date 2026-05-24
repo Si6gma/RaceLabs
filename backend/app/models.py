@@ -101,6 +101,7 @@ class ImportedLap(Base):
     avg_speed = Column(Float)
     min_speed = Column(Float)
     extra_data = Column(JSON, default=dict)
+    resampled_data = Column(JSON)
 
     session = relationship("ImportedSession", back_populates="laps")
     samples = relationship("TelemetrySample", back_populates="lap")
@@ -152,7 +153,7 @@ class TelemetrySample(Base):
     cumulative_distance = Column(Float)
     trajectory_curvature = Column(Float)
     
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, primary_key=True, default=datetime.utcnow)
 
     session = relationship("ImportedSession", back_populates="samples")
     lap = relationship("ImportedLap", back_populates="samples")

@@ -22,6 +22,13 @@ async_session = async_sessionmaker(
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Migration: add resampled_data column to imported_laps if missing
+        await conn.execute(text("""
+            ALTER TABLE imported_laps
+            ADD COLUMN IF NOT EXISTS resampled_data JSONB
+        """))
+
         # Convert telemetry_samples to a TimescaleDB hypertable partitioned by time.
         # create_hypertable is idempotent when if_not_exists => TRUE.
         await conn.execute(text("""

@@ -9,6 +9,7 @@ from sqlalchemy import select, delete
 
 from app.csv_parser import validate_csv_preview, stream_csv_rows, CSVParseStats
 from app.csv_normalizer import normalize_telemetry_data
+from app.resampler import resample_lap
 from app.models import ImportedSession, ImportedLap, TelemetrySample
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,27 @@ class CSVImportService:
                 "message": f"Storing lap {i+1}/{lap_count}...",
             }
             
+            # Build sample dicts for resampling
+            sample_dicts = [
+                {
+                    "normalized_track_position": s.normalized_track_position,
+                    "cumulative_distance": s.cumulative_distance,
+                    "speed_kmh": s.speed_kmh,
+                    "throttle": s.throttle,
+                    "brake": s.brake,
+                    "steering": s.steering,
+                    "gear": s.gear,
+                    "rpm": s.rpm,
+                    "gforce_lat": s.gforce_lat,
+                    "world_position_x": s.world_position_x,
+                    "world_position_y": s.world_position_y,
+                    "world_position_z": s.world_position_z,
+                    "lap_time": s.lap_time,
+                }
+                for s in lap.samples
+            ]
+            resampled = resample_lap(sample_dicts)
+
             lap_record = ImportedLap(
                 id=uuid.uuid4(),
                 session_id=session.id,
@@ -138,6 +160,7 @@ class CSVImportService:
                     "is_pit_lap": lap.is_pit_lap,
                     "phases_seen": ["out_lap"] if lap.is_out_lap else (["flying_lap"] if lap.is_flying_lap else (["in_lap"] if lap.is_in_lap else ["unknown"])),
                 },
+                resampled_data=resampled,
             )
             self.db.add(lap_record)
             
@@ -396,6 +419,18 @@ class CSVImportService:
             await self.db.rollback()
             return False
     
+    async def get_lap_resampled(self, lap_id: str) -> Optional[List[Dict[str, Any]]]:
+        """Get pre-computed resampled telemetry for a lap."""
+        from app.resampler import build_resampled_point_list
+
+        result = await self.db.execute(
+            select(ImportedLap).where(ImportedLap.id == uuid.UUID(lap_id))
+        )
+        lap = result.scalar_one_or_none()
+        if not lap or not lap.resampled_data:
+            return None
+        return build_resampled_point_list(lap.resampled_data)
+
     async def export_session_csv(self, session_id: str, lap_numbers: Optional[List[int]] = None) -> str:
         """Export session data to CSV string."""
         import csv

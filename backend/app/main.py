@@ -335,6 +335,16 @@ async def get_lap_telemetry(lap_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.delete("/api/import/sessions/{session_id}")
+@app.get("/api/import/laps/{lap_id}/resampled")
+async def get_lap_resampled(lap_id: str, db: AsyncSession = Depends(get_db)):
+    """Get resampled (fixed-distance grid) telemetry for a specific lap."""
+    service = CSVImportService(db)
+    samples = await service.get_lap_resampled(lap_id)
+    if samples is None:
+        raise HTTPException(status_code=404, detail="Lap not found or not resampled")
+    return {"lap_id": lap_id, "samples": samples, "count": len(samples)}
+
+
 async def delete_imported_session(session_id: str, db: AsyncSession = Depends(get_db)):
     """Delete an imported session."""
     service = CSVImportService(db)

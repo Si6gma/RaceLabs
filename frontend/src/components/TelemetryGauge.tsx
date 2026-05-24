@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { clamp } from '@/utils/formatters';
 
 interface TelemetryGaugeProps {
@@ -10,7 +11,7 @@ interface TelemetryGaugeProps {
   precision?: number;
 }
 
-export default function TelemetryGauge({ 
+function TelemetryGauge({ 
   label, 
   value, 
   max, 
@@ -43,3 +44,5 @@ export default function TelemetryGauge({
     </div>
   );
 }
+
+export default memo(TelemetryGauge);

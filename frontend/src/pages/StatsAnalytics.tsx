@@ -1,50 +1,83 @@
-import { useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { BarChart3, TrendingUp, AlertTriangle, Gauge } from 'lucide-react';
 
+interface Stats {
+  speed: { avg: number; max: number; min: number };
+  rpm: { avg: number; max: number };
+  throttle: { avg: number };
+  brake: { avg: number };
+  gear: { avg: number; max: number };
+  gForce: { latMax: number; lonMax: number };
+  totalDistance: number;
+  frameCount: number;
+}
+
+interface TyreStats {
+  temps: number[];
+  wear: number[];
+  pressures: number[];
+  compound: number;
+  age: number;
+}
+
 export default function StatsAnalytics() {
-  const { frameHistory, session } = useTelemetryStore();
-  
-  const stats = useMemo(() => {
-    if (frameHistory.length === 0) return null;
-    
-    const speeds = frameHistory.map(f => f.telemetry?.speed || 0).filter(s => s > 0);
-    const rpms = frameHistory.map(f => f.telemetry?.engine_rpm || 0).filter(r => r > 0);
-    const throttles = frameHistory.map(f => f.telemetry?.throttle || 0);
-    const brakes = frameHistory.map(f => f.telemetry?.brake || 0);
-    const gears = frameHistory.map(f => f.telemetry?.gear || 0).filter(g => g > 0);
-    const latGs = frameHistory.map(f => f.motion?.g_force_lat || 0);
-    const lonGs = frameHistory.map(f => f.motion?.g_force_lon || 0);
-    
-    const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
-    const max = (arr: number[]) => arr.length > 0 ? Math.max(...arr) : 0;
-    const min = (arr: number[]) => arr.length > 0 ? Math.min(...arr) : 0;
-    
-    return {
-      speed: { avg: avg(speeds), max: max(speeds), min: min(speeds) },
-      rpm: { avg: avg(rpms), max: max(rpms) },
-      throttle: { avg: avg(throttles) * 100 },
-      brake: { avg: avg(brakes) * 100 },
-      gear: { avg: avg(gears), max: max(gears) },
-      gForce: { latMax: max(latGs.map(Math.abs)), lonMax: max(lonGs.map(Math.abs)) },
-      totalDistance: frameHistory.length > 0 
-        ? (frameHistory[frameHistory.length - 1].lap?.total_distance || 0) 
-        : 0,
-      frameCount: frameHistory.length,
+  const session = useTelemetryStore(s => s.session);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [tyreStats, setTyreStats] = useState<TyreStats | null>(null);
+  const lastLenRef = useRef(0);
+
+  // Sample stats at 1 Hz so high-frequency store updates don't burn CPU here.
+  useEffect(() => {
+    const compute = () => {
+      const frameHistory = useTelemetryStore.getState().frameHistory;
+      if (frameHistory.length === 0) {
+        setStats(null);
+        setTyreStats(null);
+        lastLenRef.current = 0;
+        return;
+      }
+      // Skip recompute if frame count hasn't changed (no new data)
+      if (frameHistory.length === lastLenRef.current && stats !== null) return;
+      lastLenRef.current = frameHistory.length;
+
+      const speeds = frameHistory.map(f => f.telemetry?.speed || 0).filter(s => s > 0);
+      const rpms = frameHistory.map(f => f.telemetry?.engine_rpm || 0).filter(r => r > 0);
+      const throttles = frameHistory.map(f => f.telemetry?.throttle || 0);
+      const brakes = frameHistory.map(f => f.telemetry?.brake || 0);
+      const gears = frameHistory.map(f => f.telemetry?.gear || 0).filter(g => g > 0);
+      const latGs = frameHistory.map(f => f.motion?.g_force_lat || 0);
+      const lonGs = frameHistory.map(f => f.motion?.g_force_lon || 0);
+
+      const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
+      const max = (arr: number[]) => arr.length > 0 ? Math.max(...arr) : 0;
+      const min = (arr: number[]) => arr.length > 0 ? Math.min(...arr) : 0;
+
+      setStats({
+        speed: { avg: avg(speeds), max: max(speeds), min: min(speeds) },
+        rpm: { avg: avg(rpms), max: max(rpms) },
+        throttle: { avg: avg(throttles) * 100 },
+        brake: { avg: avg(brakes) * 100 },
+        gear: { avg: avg(gears), max: max(gears) },
+        gForce: { latMax: max(latGs.map(Math.abs)), lonMax: max(lonGs.map(Math.abs)) },
+        totalDistance: frameHistory[frameHistory.length - 1].lap?.total_distance || 0,
+        frameCount: frameHistory.length,
+      });
+
+      const last = frameHistory[frameHistory.length - 1];
+      setTyreStats({
+        temps: last.telemetry?.tyres_surface_temp || [0, 0, 0, 0],
+        wear: last.status?.tyres_wear || [0, 0, 0, 0],
+        pressures: last.telemetry?.tyres_pressure || [0, 0, 0, 0],
+        compound: last.status?.tyre_compound || 0,
+        age: last.status?.tyres_age_laps || 0,
+      });
     };
-  }, [frameHistory]);
-  
-  const tyreStats = useMemo(() => {
-    if (frameHistory.length === 0) return null;
-    const last = frameHistory[frameHistory.length - 1];
-    return {
-      temps: last.telemetry?.tyres_surface_temp || [0, 0, 0, 0],
-      wear: last.status?.tyres_wear || [0, 0, 0, 0],
-      pressures: last.telemetry?.tyres_pressure || [0, 0, 0, 0],
-      compound: last.status?.tyre_compound || 0,
-      age: last.status?.tyres_age_laps || 0,
-    };
-  }, [frameHistory]);
+
+    compute();
+    const id = setInterval(compute, 1000);
+    return () => clearInterval(id);
+  }, []);
   
   return (
     <div className="h-full flex flex-col p-3 gap-3 overflow-auto">

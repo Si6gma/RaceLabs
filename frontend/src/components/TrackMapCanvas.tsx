@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { memo, useRef, useEffect } from 'react';
 
 interface Point { x: number; z: number; }
 
@@ -10,7 +10,7 @@ interface MiniTrackMapProps {
   sessionType?: number;
 }
 
-export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionType }: MiniTrackMapProps) {
+function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionType }: MiniTrackMapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const currentLapRef = useRef<Point[]>([]);
   const previousLapRef = useRef<Point[]>([]);
@@ -18,7 +18,23 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
   const lastTrackIdRef = useRef<number | undefined>(undefined);
   const lastSessionTypeRef = useRef<number | undefined>(undefined);
 
-  // Accumulate positions, archiving to previous when lap number increments
+  // Cached bounds so we don't recompute min/max over thousands of points every frame.
+  const boundsRef = useRef({ minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
+  const rafRef = useRef<number>(0);
+  const needsDrawRef = useRef(false);
+
+  // Schedule a canvas redraw using requestAnimationFrame.
+  const scheduleDraw = () => {
+    if (needsDrawRef.current) return;
+    needsDrawRef.current = true;
+    rafRef.current = requestAnimationFrame(() => {
+      needsDrawRef.current = false;
+      draw();
+    });
+  };
+
+  // Accumulate positions, archiving to previous when lap number increments.
+  // We push directly into the ref array (no spread) to avoid O(n) copies.
   useEffect(() => {
     const hasPos = posX !== 0 || posZ !== 0;
 
@@ -28,6 +44,7 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
     if (trackChanged || sessionChanged) {
       currentLapRef.current = [];
       previousLapRef.current = [];
+      boundsRef.current = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
     }
     lastTrackIdRef.current = trackId;
     lastSessionTypeRef.current = sessionType;
@@ -36,17 +53,29 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
       if (currentLapRef.current.length > 0) {
         previousLapRef.current = currentLapRef.current;
         currentLapRef.current = [];
+        // Recompute bounds from scratch when archiving laps
+        boundsRef.current = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
       }
     }
     lastLapNumRef.current = lapNumber;
 
     if (hasPos) {
-      currentLapRef.current = [...currentLapRef.current, { x: posX, z: posZ }];
+      currentLapRef.current.push({ x: posX, z: posZ });
+      // Incrementally update bounds
+      const b = boundsRef.current;
+      if (posX < b.minX) b.minX = posX;
+      if (posX > b.maxX) b.maxX = posX;
+      if (posZ < b.minZ) b.minZ = posZ;
+      if (posZ > b.maxZ) b.maxZ = posZ;
+      scheduleDraw();
     }
-  }, [posX, posZ, lapNumber]);
 
-  // Redraw whenever position changes
-  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [posX, posZ, lapNumber, trackId, sessionType]);
+
+  const draw = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -64,9 +93,9 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
 
     const current = currentLapRef.current;
     const previous = previousLapRef.current;
-    const allPoints = [...previous, ...current];
+    const allPoints = previous.length + current.length;
 
-    if (allPoints.length < 2) {
+    if (allPoints < 2) {
       ctx.strokeStyle = '#2a2a2a';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -79,11 +108,11 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
       return;
     }
 
-    // Compute bounds from all points
-    const xs = allPoints.map(p => p.x);
-    const zs = allPoints.map(p => p.z);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+    const b = boundsRef.current;
+    const minX = b.minX === Infinity ? 0 : b.minX;
+    const maxX = b.maxX === -Infinity ? 1 : b.maxX;
+    const minZ = b.minZ === Infinity ? 0 : b.minZ;
+    const maxZ = b.maxZ === -Infinity ? 1 : b.maxZ;
 
     const padding = 10;
     const scaleX = (w - padding * 2) / (maxX - minX || 1);
@@ -127,7 +156,7 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
       });
       ctx.stroke();
 
-      // Highlight recent trail in bright cyan
+      // Highlight recent trail in bright cyan (limit to last 80)
       const recent = current.slice(-80);
       for (let i = 1; i < recent.length; i++) {
         const p1 = toScreen(recent[i - 1]);
@@ -153,7 +182,7 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
       ctx.arc(cur.x, cur.y, 4, 0, Math.PI * 2);
       ctx.fill();
     }
-  }, [posX, posZ]);
+  };
 
   return (
     <div className="flex flex-col gap-2 h-full">
@@ -165,3 +194,5 @@ export function MiniTrackMap({ posX = 0, posZ = 0, lapNumber, trackId, sessionTy
     </div>
   );
 }
+
+export const MiniTrackMapMemo = memo(MiniTrackMap);

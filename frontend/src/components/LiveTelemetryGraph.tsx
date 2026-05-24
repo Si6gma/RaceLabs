@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { memo, useEffect, useRef, useState, useCallback } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import TelemetryGraphCanvas, { CHANNELS } from '@/components/TelemetryGraphCanvas';
 import ZoomRangeBar from '@/components/ZoomRangeBar';
@@ -38,8 +38,8 @@ function frameToPoint(frame: any): TelemetryPoint | null {
   };
 }
 
-export default function LiveTelemetryGraph() {
-  const { currentFrame } = useTelemetryStore();
+function LiveTelemetryGraph() {
+  const currentFrame = useTelemetryStore(s => s.currentFrame);
 
   const bufferRef = useRef<TelemetryPoint[]>([]);
   const lastLapNumRef = useRef<number | undefined>(undefined);
@@ -163,15 +163,38 @@ export default function LiveTelemetryGraph() {
     dragStartZoom.current = [...zoomRange] as [number, number];
   }, [zoomRange]);
 
+  // Throttle hover state updates to ~30fps via rAF to avoid React re-render thrashing.
+  const rafHoverRef = useRef<number>(0);
+  const pendingHoverRef = useRef<{ pos: number; x: number; y: number } | null>(null);
+
+  const flushHover = useCallback(() => {
+    const pending = pendingHoverRef.current;
+    if (!pending) return;
+    pendingHoverRef.current = null;
+    hoverPositionRef.current = pending.pos;
+    setHoverPosition(pending.pos);
+    setHoverPos({ x: pending.x, y: pending.y });
+  }, []);
+
+  const scheduleHoverUpdate = useCallback((pos: number, x: number, y: number) => {
+    pendingHoverRef.current = { pos, x, y };
+    if (!rafHoverRef.current) {
+      rafHoverRef.current = requestAnimationFrame(() => {
+        rafHoverRef.current = 0;
+        flushHover();
+      });
+    }
+  }, [flushHover]);
+
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging.current) {
       const pos = getPositionFromX(e.clientX);
-      hoverPositionRef.current = pos;
-      setHoverPosition(pos);
       const container = graphContainerRef.current;
       if (container) {
         const rect = container.getBoundingClientRect();
-        setHoverPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+        scheduleHoverUpdate(pos, e.clientX - rect.left, e.clientY - rect.top);
+      } else {
+        scheduleHoverUpdate(pos, 0, 0);
       }
       return;
     }
@@ -189,7 +212,7 @@ export default function LiveTelemetryGraph() {
     if (ns < 0) { ns = 0; ne = span; }
     if (ne > 1) { ne = 1; ns = Math.max(0, 1 - span); }
     setZoomRange([ns, ne]);
-  }, [getPositionFromX]);
+  }, [getPositionFromX, scheduleHoverUpdate]);
 
   const handleMouseUp = useCallback(() => {
     if (isDragging.current && !hasDragged.current) {
@@ -205,6 +228,10 @@ export default function LiveTelemetryGraph() {
 
   const handleMouseLeave = useCallback(() => {
     isDragging.current = false;
+    if (rafHoverRef.current) {
+      cancelAnimationFrame(rafHoverRef.current);
+      rafHoverRef.current = 0;
+    }
     if (!cursorLocked) setHoverPos(null);
   }, [cursorLocked]);
 
@@ -322,6 +349,8 @@ export default function LiveTelemetryGraph() {
     </div>
   );
 }
+
+export default memo(LiveTelemetryGraph);
 
 interface LiveTooltipProps {
   sample: TelemetryPoint;

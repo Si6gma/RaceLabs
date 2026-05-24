@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { clamp } from '@/utils/formatters';
 
 interface RPMBarProps {
@@ -7,7 +7,7 @@ interface RPMBarProps {
   shiftLightPercent?: number;
 }
 
-export default function RPMBar({ rpm, maxRpm, shiftLightPercent = 85 }: RPMBarProps) {
+function RPMBar({ rpm, maxRpm, shiftLightPercent = 85 }: RPMBarProps) {
   const percent = useMemo(() => {
     if (!maxRpm || maxRpm <= 0) return 0;
     return clamp((rpm / maxRpm) * 100, 0, 100);
@@ -16,6 +16,25 @@ export default function RPMBar({ rpm, maxRpm, shiftLightPercent = 85 }: RPMBarPr
   const segments = 30;
   const activeSegments = Math.floor((percent / 100) * segments);
   const shiftStart = Math.floor((shiftLightPercent / 100) * segments);
+
+  const segmentNodes = useMemo(() => {
+    return Array.from({ length: segments }).map((_, i) => {
+      const isActive = i < activeSegments;
+      const isShift = i >= shiftStart;
+      return (
+        <div
+          key={i}
+          className="flex-1 rounded-sm transition-all duration-75"
+          style={{
+            backgroundColor: isActive 
+              ? isShift ? '#ff1744' : '#00e5ff'
+              : '#2a2a2a',
+            boxShadow: isActive && isShift ? '0 0 6px rgba(255, 23, 68, 0.6)' : 'none',
+          }}
+        />
+      );
+    });
+  }, [activeSegments, shiftStart]);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -26,26 +45,13 @@ export default function RPMBar({ rpm, maxRpm, shiftLightPercent = 85 }: RPMBarPr
         </span>
       </div>
       <div className="flex gap-0.5 h-3">
-        {Array.from({ length: segments }).map((_, i) => {
-          const isActive = i < activeSegments;
-          const isShift = i >= shiftStart;
-          return (
-            <div
-              key={i}
-              className="flex-1 rounded-sm transition-all duration-75"
-              style={{
-                backgroundColor: isActive 
-                  ? isShift ? '#ff1744' : '#00e5ff'
-                  : '#2a2a2a',
-                boxShadow: isActive && isShift ? '0 0 6px rgba(255, 23, 68, 0.6)' : 'none',
-              }}
-            />
-          );
-        })}
+        {segmentNodes}
       </div>
     </div>
   );
 }
+
+export default memo(RPMBar);
 
 function getRpmColor(percent: number, shiftLight: number): string {
   if (percent >= 98) return '#ff1744';

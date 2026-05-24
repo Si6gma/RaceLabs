@@ -6,7 +6,9 @@ import type { ImportProgress } from '@/types/telemetry';
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 export default function ImportModal() {
-  const { importModalOpen, setImportModalOpen, addImportedSession } = useTelemetryStore();
+  const importModalOpen = useTelemetryStore(s => s.importModalOpen);
+  const setImportModalOpen = useTelemetryStore(s => s.setImportModalOpen);
+  const addImportedSession = useTelemetryStore(s => s.addImportedSession);
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [validation, setValidation] = useState<any>(null);

@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { clamp } from '@/utils/formatters';
 
 interface ERSIndicatorProps {
@@ -8,7 +9,7 @@ interface ERSIndicatorProps {
   deployed: number;
 }
 
-export default function ERSIndicator({ 
+function ERSIndicator({ 
   storeEnergy = 0, 
   deployMode = 0,
   harvestedMGUK = 0,
@@ -60,3 +61,5 @@ export default function ERSIndicator({
     </div>
   );
 }
+
+export default memo(ERSIndicator);

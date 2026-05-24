@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import type { TelemetryPoint } from '@/utils/telemetryAdapter';
 
 export interface ChannelDef {
@@ -42,7 +42,7 @@ interface Props {
   cursorLocked: boolean;
 }
 
-export default function TelemetryGraphCanvas({
+function TelemetryGraphCanvas({
   laps,
   visibleChannels,
   zoomRange,
@@ -249,3 +249,5 @@ export default function TelemetryGraphCanvas({
     </div>
   );
 }
+
+export default memo(TelemetryGraphCanvas);

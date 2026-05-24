@@ -8,7 +8,11 @@ import { useNavigate } from 'react-router-dom';
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 export default function SessionTable() {
-  const { session, importedSessions, setImportedSessions, setImportModalOpen, removeImportedSession } = useTelemetryStore();
+  const session = useTelemetryStore(s => s.session);
+  const importedSessions = useTelemetryStore(s => s.importedSessions);
+  const setImportedSessions = useTelemetryStore(s => s.setImportedSessions);
+  const setImportModalOpen = useTelemetryStore(s => s.setImportModalOpen);
+  const removeImportedSession = useTelemetryStore(s => s.removeImportedSession);
   const [filter, setFilter] = useState('');
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

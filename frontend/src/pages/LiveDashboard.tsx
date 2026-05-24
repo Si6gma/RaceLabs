@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from 'react';
+import { memo, useMemo, useEffect } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatTime, formatGear, formatSpeed } from '@/utils/formatters';
 import RPMBar from '@/components/RPMBar';
@@ -7,11 +7,13 @@ import SteeringWheel from '@/components/SteeringWheel';
 import TyreDisplay from '@/components/TyreDisplay';
 import DRSIndicator from '@/components/DRSIndicator';
 import ERSIndicator from '@/components/ERSIndicator';
-import { MiniTrackMap } from '@/components/TrackMapCanvas';
+import { MiniTrackMapMemo } from '@/components/TrackMapCanvas';
 import LiveTelemetryGraph from '@/components/LiveTelemetryGraph';
 
-export default function LiveDashboard() {
-  const { currentFrame, session, setSession } = useTelemetryStore();
+function LiveDashboard() {
+  const currentFrame = useTelemetryStore(s => s.currentFrame);
+  const session = useTelemetryStore(s => s.session);
+  const setSession = useTelemetryStore(s => s.setSession);
 
   const t = currentFrame?.telemetry;
   const l = currentFrame?.lap;
@@ -225,7 +227,7 @@ export default function LiveDashboard() {
         
         {/* Mini Track Map */}
         <div className="col-span-2 telemetry-panel p-4">
-          <MiniTrackMap
+          <MiniTrackMapMemo
             posX={m?.world_pos_x}
             posZ={m?.world_pos_z}
             lapNumber={l?.current_lap_num}
@@ -259,3 +261,5 @@ export default function LiveDashboard() {
     </div>
   );
 }
+
+export default memo(LiveDashboard);

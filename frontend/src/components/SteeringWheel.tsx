@@ -1,9 +1,11 @@
+import { memo } from 'react';
+
 interface SteeringWheelProps {
   steer: number; // -1 to 1
   size?: number;
 }
 
-export default function SteeringWheel({ steer, size = 120 }: SteeringWheelProps) {
+function SteeringWheel({ steer, size = 120 }: SteeringWheelProps) {
   const rotation = steer * 450; // max 450 degrees
   
   return (
@@ -55,3 +57,5 @@ export default function SteeringWheel({ steer, size = 120 }: SteeringWheelProps)
     </div>
   );
 }
+
+export default memo(SteeringWheel);

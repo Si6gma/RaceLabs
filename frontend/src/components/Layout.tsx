@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, memo } from 'react';
 import {
   Activity,
   GitCompare,
@@ -21,8 +21,61 @@ const navItems = [
 
 type GameStatus = 'offline' | 'no_game' | 'garage' | 'on_track';
 
+function GameStatusIndicator({ sessionLabel }: { sessionLabel: string | null }) {
+  const connected = useTelemetryStore(s => s.connected);
+  const lastFrameTime = useTelemetryStore(s => s.lastFrameTime);
+  const driverStatus = useTelemetryStore(s => s.currentFrame?.lap?.driver_status);
+
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const gameStatus = useMemo((): GameStatus => {
+    if (!connected) return 'offline';
+    if (!lastFrameTime || now - lastFrameTime > 3000) return 'no_game';
+    if (driverStatus === undefined || driverStatus === 0) return 'garage';
+    return 'on_track';
+  }, [connected, lastFrameTime, now, driverStatus]);
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {gameStatus === 'offline' && (
+        <>
+          <span className="w-1.5 h-1.5 rounded-full bg-motorsport-dim" />
+          <span className="text-[11px] text-motorsport-muted">Offline</span>
+        </>
+      )}
+      {gameStatus === 'no_game' && (
+        <>
+          <span className="w-1.5 h-1.5 rounded-full bg-motorsport-dim" />
+          <span className="text-[11px] text-motorsport-muted">No Game</span>
+        </>
+      )}
+      {gameStatus === 'garage' && (
+        <>
+          <span className="w-1.5 h-1.5 rounded-full bg-motorsport-orange" />
+          <span className="text-[11px] text-motorsport-orange font-medium">In Garage</span>
+        </>
+      )}
+      {gameStatus === 'on_track' && (
+        <>
+          <span className="w-1.5 h-1.5 rounded-full bg-motorsport-green animate-pulse" />
+          <span className="text-[11px] text-motorsport-green font-medium">{sessionLabel}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+const GameStatusIndicatorMemo = memo(GameStatusIndicator);
+
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { connected, session, replayMode, currentFrame, lastFrameTime, recording, setRecording } = useTelemetryStore();
+  const session = useTelemetryStore(s => s.session);
+  const replayMode = useTelemetryStore(s => s.replayMode);
+  const recording = useTelemetryStore(s => s.recording);
+  const setRecording = useTelemetryStore(s => s.setRecording);
 
   useEffect(() => {
     fetch('/api/recording/status').then(r => r.json()).then(d => setRecording(d.recording)).catch(() => {});
@@ -37,24 +90,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     } catch {}
   }
 
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const gameStatus = useMemo((): GameStatus => {
-    if (!connected) return 'offline';
-    if (!lastFrameTime || now - lastFrameTime > 3000) return 'no_game';
-    const driverStatus = currentFrame?.lap?.driver_status;
-    if (driverStatus === undefined || driverStatus === 0) return 'garage';
-    return 'on_track';
-  }, [connected, lastFrameTime, now, currentFrame]);
-
   const sessionLabel = useMemo(() => {
-    if (gameStatus !== 'on_track') return null;
     return session?.session_type || 'On Track';
-  }, [gameStatus, session]);
+  }, [session]);
 
   return (
     <div className="h-screen flex flex-col bg-motorsport-black overflow-hidden">
@@ -111,32 +149,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               Replay
             </span>
           )}
-          <div className="flex items-center gap-1.5">
-            {gameStatus === 'offline' && (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-dim" />
-                <span className="text-[11px] text-motorsport-muted">Offline</span>
-              </>
-            )}
-            {gameStatus === 'no_game' && (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-dim" />
-                <span className="text-[11px] text-motorsport-muted">No Game</span>
-              </>
-            )}
-            {gameStatus === 'garage' && (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-orange" />
-                <span className="text-[11px] text-motorsport-orange font-medium">In Garage</span>
-              </>
-            )}
-            {gameStatus === 'on_track' && (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-green animate-pulse" />
-                <span className="text-[11px] text-motorsport-green font-medium">{sessionLabel}</span>
-              </>
-            )}
-          </div>
+          <GameStatusIndicatorMemo sessionLabel={sessionLabel} />
         </div>
       </header>
 

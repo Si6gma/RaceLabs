@@ -1,9 +1,11 @@
+import { memo } from 'react';
+
 interface DRSIndicatorProps {
   active: boolean;
   allowed: boolean;
 }
 
-export default function DRSIndicator({ active, allowed }: DRSIndicatorProps) {
+function DRSIndicator({ active, allowed }: DRSIndicatorProps) {
   return (
     <div className="flex flex-col items-center gap-1.5">
       <span className="telemetry-label">DRS</span>
@@ -24,3 +26,5 @@ export default function DRSIndicator({ active, allowed }: DRSIndicatorProps) {
     </div>
   );
 }
+
+export default memo(DRSIndicator);

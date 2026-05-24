@@ -42,7 +42,7 @@ interface UnifiedSession {
 export default function SessionViewer() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
-  const { setSelectedImportedSession } = useTelemetryStore();
+  const setSelectedImportedSession = useTelemetryStore(s => s.setSelectedImportedSession);
 
   const [session, setSession] = useState<UnifiedSession | null>(null);
   const [laps, setLaps] = useState<UnifiedLap[]>([]);

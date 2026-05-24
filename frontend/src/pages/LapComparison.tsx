@@ -4,7 +4,9 @@ import { GitCompare, Check, X, Trophy } from 'lucide-react';
 import { formatTime, formatDelta } from '@/utils/formatters';
 
 export default function LapComparison() {
-  const { laps, compareLaps, toggleCompareLap } = useTelemetryStore();
+  const laps = useTelemetryStore(s => s.laps);
+  const compareLaps = useTelemetryStore(s => s.compareLaps);
+  const toggleCompareLap = useTelemetryStore(s => s.toggleCompareLap);
   
   const lapList = useMemo(() => {
     return Object.values(laps).sort((a, b) => a.lap_number - b.lap_number);

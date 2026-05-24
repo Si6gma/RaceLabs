@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { getTempColor, getWearColor } from '@/utils/colors';
 
 interface TyreDisplayProps {
@@ -14,7 +15,7 @@ function getCompoundName(compound: number): string {
   return compounds[compound] || `C${compound}`;
 }
 
-export default function TyreDisplay({ temps = [0,0,0,0], wear = [0,0,0,0], pressures = [0,0,0,0], compound = 0 }: TyreDisplayProps) {
+function TyreDisplay({ temps = [0,0,0,0], wear = [0,0,0,0], pressures = [0,0,0,0], compound = 0 }: TyreDisplayProps) {
   const labels = ['FL', 'FR', 'RL', 'RR'];
   
   return (
@@ -59,3 +60,5 @@ export default function TyreDisplay({ temps = [0,0,0,0], wear = [0,0,0,0], press
     </div>
   );
 }
+
+export default memo(TyreDisplay);

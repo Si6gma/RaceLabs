@@ -223,12 +223,40 @@ function LiveDashboard() {
         </div>
         
         {/* DRS & ERS */}
-        <div className="col-span-2 telemetry-panel p-4 flex flex-row gap-3 items-center justify-center">
-          <DRSIndicator active={t?.drs === 1} allowed={s?.drs_allowed === 1} />
-          <ERSIndicator 
-            storeEnergy={s?.ers_store_energy || 0}
-            deployMode={s?.ers_deploy_mode || 0}
-          />
+        <div className="col-span-2 telemetry-panel p-4 flex flex-col gap-3 justify-center">
+          {/* Status boxes side by side */}
+          <div className="flex flex-row gap-3 items-center justify-center">
+            <DRSIndicator active={t?.drs === 1} allowed={s?.drs_allowed === 1} />
+            <ERSIndicator deployMode={s?.ers_deploy_mode || 0} />
+          </div>
+
+          {/* ERS Battery Bar — full width below both */}
+          <div className="w-full">
+            <div className="flex gap-0.5 h-4">
+              {Array.from({ length: 10 }).map((_, i) => {
+                const percent = Math.min(100, Math.max(0, ((s?.ers_store_energy || 0) / 4000000) * 100));
+                const filled = i < Math.ceil(percent / 10);
+                const isFirst = i === 0;
+                const isLast = i === 9;
+                return (
+                  <div
+                    key={i}
+                    className={`flex-1 rounded-sm transition-colors duration-150 ${
+                      filled ? 'bg-yellow-400' : 'bg-motorsport-black'
+                    }`}
+                    style={{
+                      borderRadius: isFirst ? '3px 0 0 3px' : isLast ? '0 3px 3px 0' : '0',
+                    }}
+                  />
+                );
+              })}
+            </div>
+            <div className="text-center mt-1">
+              <span className="font-telemetry text-[10px] text-yellow-400 tabular-nums">
+                {Math.min(100, Math.max(0, ((s?.ers_store_energy || 0) / 4000000) * 100)).toFixed(0)}%
+              </span>
+            </div>
+          </div>
         </div>
         
         {/* Tyres */}

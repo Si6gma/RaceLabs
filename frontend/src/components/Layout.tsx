@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useEffect, useState, useMemo } from 'react';
 import {
   Activity,
   GitCompare,
@@ -18,8 +19,42 @@ const navItems = [
   { path: '/setup', label: 'Setup', icon: Settings },
 ];
 
+type GameStatus = 'offline' | 'no_game' | 'garage' | 'on_track';
+
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { connected, session, replayMode } = useTelemetryStore();
+  const { connected, session, replayMode, currentFrame, lastFrameTime, recording, setRecording } = useTelemetryStore();
+
+  useEffect(() => {
+    fetch('/api/recording/status').then(r => r.json()).then(d => setRecording(d.recording)).catch(() => {});
+  }, [setRecording]);
+
+  async function toggleRecording() {
+    const endpoint = recording ? '/api/recording/stop' : '/api/recording/start';
+    try {
+      const res = await fetch(endpoint, { method: 'POST' });
+      const data = await res.json();
+      setRecording(data.recording);
+    } catch {}
+  }
+
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const gameStatus = useMemo((): GameStatus => {
+    if (!connected) return 'offline';
+    if (!lastFrameTime || now - lastFrameTime > 3000) return 'no_game';
+    const driverStatus = currentFrame?.lap?.driver_status;
+    if (driverStatus === undefined || driverStatus === 0) return 'garage';
+    return 'on_track';
+  }, [connected, lastFrameTime, now, currentFrame]);
+
+  const sessionLabel = useMemo(() => {
+    if (gameStatus !== 'on_track') return null;
+    return session?.session_type || 'On Track';
+  }, [gameStatus, session]);
 
   return (
     <div className="h-screen flex flex-col bg-motorsport-black overflow-hidden">
@@ -58,6 +93,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Right side status */}
         <div className="ml-auto flex items-center gap-3">
+          <button
+            onClick={toggleRecording}
+            className={`flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded border font-semibold tracking-wider uppercase transition-colors ${
+              recording
+                ? 'bg-motorsport-red/15 text-motorsport-red border-motorsport-red/40 hover:bg-motorsport-red/25'
+                : 'bg-transparent text-motorsport-dim border-motorsport-border hover:text-motorsport-muted hover:border-motorsport-muted/40'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${recording ? 'bg-motorsport-red animate-pulse' : 'bg-motorsport-dim'}`} />
+            Rec
+          </button>
+
           {replayMode && (
             <span className="flex items-center gap-1.5 text-[10px] px-2 py-0.5 bg-motorsport-purple/15 text-motorsport-purple border border-motorsport-purple/30 rounded font-semibold tracking-wider uppercase">
               <RotateCcw className="w-3 h-3" />
@@ -65,15 +112,28 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </span>
           )}
           <div className="flex items-center gap-1.5">
-            {connected ? (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-green animate-pulse" />
-                <span className="text-[11px] text-motorsport-green font-medium">Live</span>
-              </>
-            ) : (
+            {gameStatus === 'offline' && (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-motorsport-dim" />
                 <span className="text-[11px] text-motorsport-muted">Offline</span>
+              </>
+            )}
+            {gameStatus === 'no_game' && (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-dim" />
+                <span className="text-[11px] text-motorsport-muted">No Game</span>
+              </>
+            )}
+            {gameStatus === 'garage' && (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-orange" />
+                <span className="text-[11px] text-motorsport-orange font-medium">In Garage</span>
+              </>
+            )}
+            {gameStatus === 'on_track' && (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-motorsport-green animate-pulse" />
+                <span className="text-[11px] text-motorsport-green font-medium">{sessionLabel}</span>
               </>
             )}
           </div>

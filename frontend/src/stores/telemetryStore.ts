@@ -6,6 +6,7 @@ interface TelemetryState {
   currentFrame: TelemetryFrame | null;
   frameHistory: TelemetryFrame[];
   maxHistory: number;
+  lastFrameTime: number | null;
   
   // Session
   session: SessionSummary | null;
@@ -20,6 +21,7 @@ interface TelemetryState {
   connected: boolean;
   connecting: boolean;
   replayMode: boolean;
+  recording: boolean;
   
   // UI State
   selectedLaps: number[];
@@ -33,6 +35,7 @@ interface TelemetryState {
   setConnected: (connected: boolean) => void;
   setConnecting: (connecting: boolean) => void;
   setReplayMode: (replay: boolean) => void;
+  setRecording: (recording: boolean) => void;
   selectLap: (lap: number) => void;
   deselectLap: (lap: number) => void;
   toggleCompareLap: (lap: number) => void;
@@ -53,6 +56,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   currentFrame: null,
   frameHistory: [],
   maxHistory: 1000,
+  lastFrameTime: null,
   session: null,
   laps: {},
   importedSessions: [],
@@ -61,17 +65,29 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   connected: false,
   connecting: false,
   replayMode: false,
+  recording: false,
   selectedLaps: [],
   compareLaps: [],
   importModalOpen: false,
   
   setCurrentFrame: (frame) => {
     const state = get();
-    const newHistory = [...state.frameHistory, frame];
+    // Merge sub-objects so partial packets (motion, lap, status, etc.)
+    // don't clear fields received in a different packet type
+    const merged = {
+      ...frame,
+      telemetry: frame.telemetry ?? state.currentFrame?.telemetry,
+      motion: frame.motion ?? state.currentFrame?.motion,
+      lap: frame.lap ?? state.currentFrame?.lap,
+      status: frame.status ?? state.currentFrame?.status,
+      damage: frame.damage ?? state.currentFrame?.damage,
+      session: frame.session ?? state.currentFrame?.session,
+    };
+    const newHistory = [...state.frameHistory, merged];
     if (newHistory.length > state.maxHistory) {
       newHistory.shift();
     }
-    set({ currentFrame: frame, frameHistory: newHistory });
+    set({ currentFrame: merged, frameHistory: newHistory, lastFrameTime: Date.now() });
   },
   
   setSession: (session) => set({ session }),
@@ -79,6 +95,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   setConnected: (connected) => set({ connected }),
   setConnecting: (connecting) => set({ connecting }),
   setReplayMode: (replayMode) => set({ replayMode }),
+  setRecording: (recording) => set({ recording }),
   
   selectLap: (lap) => {
     const state = get();

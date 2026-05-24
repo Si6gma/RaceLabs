@@ -84,9 +84,12 @@ export function normalizeLiveFrames(frames: any[]): TelemetryPoint[] {
       rpm: telem.engine_rpm ?? 0,
       gforce_lat: motion.g_force_lat ?? 0,
       delta_time: lap.delta_time ?? 0,
+      // F1 UDP: X=lateral, Y=altitude, Z=longitudinal.
+      // TrackMapViewer uses X,Y as the ground plane (matching the CSV/MoTeC convention).
+      // Map Z (longitudinal) → Y and Y (altitude) → Z so live and imported data share the same axes.
       world_position_x: motion.world_pos_x ?? 0,
-      world_position_y: motion.world_pos_y ?? 0,
-      world_position_z: motion.world_pos_z ?? 0,
+      world_position_y: motion.world_pos_z ?? 0,
+      world_position_z: motion.world_pos_y ?? 0,
       normalized_track_position: trackLength > 0 ? lapDistance / trackLength : 0,
       lap_time: lap.current_lap_time_ms ? lap.current_lap_time_ms / 1000 : undefined,
       sector: lap.sector ?? 0,

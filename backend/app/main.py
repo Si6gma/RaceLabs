@@ -172,6 +172,23 @@ async def get_telemetry_buffer(limit: int = 100):
     return {"frames": frames, "count": len(frames)}
 
 
+@app.get("/api/recording/status")
+async def get_recording_status():
+    return {"recording": pipeline.is_recording}
+
+
+@app.post("/api/recording/start")
+async def start_recording():
+    pipeline.start_recording()
+    return {"recording": True}
+
+
+@app.post("/api/recording/stop")
+async def stop_recording():
+    pipeline.stop_recording()
+    return {"recording": False}
+
+
 @app.post("/api/replay/start")
 async def start_replay(lap_number: int, speed: float = 1.0):
     data = pipeline.get_lap_data(lap_number)
@@ -334,7 +351,6 @@ async def get_lap_telemetry(lap_id: str, db: AsyncSession = Depends(get_db)):
     return {"lap_id": lap_id, "samples": samples, "count": len(samples)}
 
 
-@app.delete("/api/import/sessions/{session_id}")
 @app.get("/api/import/laps/{lap_id}/resampled")
 async def get_lap_resampled(lap_id: str, db: AsyncSession = Depends(get_db)):
     """Get resampled (fixed-distance grid) telemetry for a specific lap."""
@@ -345,6 +361,7 @@ async def get_lap_resampled(lap_id: str, db: AsyncSession = Depends(get_db)):
     return {"lap_id": lap_id, "samples": samples, "count": len(samples)}
 
 
+@app.delete("/api/import/sessions/{session_id}")
 async def delete_imported_session(session_id: str, db: AsyncSession = Depends(get_db)):
     """Delete an imported session."""
     service = CSVImportService(db)

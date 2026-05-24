@@ -166,6 +166,7 @@ class TelemetryPipeline:
         self._listeners: List[Any] = []
         self._lock = asyncio.Lock()
         self._running = False
+        self._recording = False
         self._replay_mode = False
         self._replay_buffer: List[Dict[str, Any]] = []
         self._replay_index = 0
@@ -234,18 +235,17 @@ class TelemetryPipeline:
                         self.session_state.current_lap = lap_num
                 elif lap_num > 0:
                     self.session_state.current_lap = lap_num
-                    
-                    # Create lap buffer if needed
-                    if lap_num not in self.session_state.lap_buffers:
-                        self.session_state.lap_buffers[lap_num] = LapBuffer(lap_number=lap_num)
-                    
-                    self.session_state.lap_buffers[lap_num].add_frame(frame_dict)
-                    
-                    # Update best lap time
-                    if self.session_state.lap_buffers[lap_num].best_lap_time:
-                        if self.session_state.best_lap_time is None or \
-                           self.session_state.lap_buffers[lap_num].best_lap_time < self.session_state.best_lap_time:
-                            self.session_state.best_lap_time = self.session_state.lap_buffers[lap_num].best_lap_time
+
+                    if self._recording:
+                        if lap_num not in self.session_state.lap_buffers:
+                            self.session_state.lap_buffers[lap_num] = LapBuffer(lap_number=lap_num)
+
+                        self.session_state.lap_buffers[lap_num].add_frame(frame_dict)
+
+                        if self.session_state.lap_buffers[lap_num].best_lap_time:
+                            if self.session_state.best_lap_time is None or \
+                               self.session_state.lap_buffers[lap_num].best_lap_time < self.session_state.best_lap_time:
+                                self.session_state.best_lap_time = self.session_state.lap_buffers[lap_num].best_lap_time
         
         for listener in self._listeners:
             try:
@@ -423,6 +423,16 @@ class TelemetryPipeline:
             "status": "active" if active else "completed",
         }
         
+    @property
+    def is_recording(self) -> bool:
+        return self._recording
+
+    def start_recording(self):
+        self._recording = True
+
+    def stop_recording(self):
+        self._recording = False
+
     def start_replay(self, lap_data: List[Dict[str, Any]], speed: float = 1.0):
         self._replay_mode = True
         self._replay_buffer = lap_data

@@ -20,6 +20,8 @@ export interface TelemetryPoint {
   lap_time?: number;
   sector: number;
   cumulative_distance: number;
+  /** Monotonic timestamp in seconds (e.g. performance.now()/1000). Used for time-based graphs. */
+  timestamp?: number;
 }
 
 /**

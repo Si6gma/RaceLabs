@@ -40,6 +40,7 @@ interface Props {
   zoomRange: [number, number];
   effectivePosition: number;
   cursorLocked: boolean;
+  xField?: 'normalized_track_position' | 'timestamp';
 }
 
 function TelemetryGraphCanvas({
@@ -48,6 +49,7 @@ function TelemetryGraphCanvas({
   zoomRange,
   effectivePosition,
   cursorLocked,
+  xField = 'normalized_track_position',
 }: Props) {
   const dataCanvasRef = useRef<HTMLCanvasElement>(null);
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -89,24 +91,42 @@ function TelemetryGraphCanvas({
         ctx.stroke();
       }
 
-      // Channel traces — drawn using normalized_track_position as X domain
+      // Resolve X domain helper
+      const isTimeBased = xField === 'timestamp';
+      const refLap = laps[0];
+      let timeMin = 0;
+      let timeMax = 1;
+      let timeSpan = 1;
+      if (isTimeBased && refLap && refLap.data.length > 0) {
+        timeMin = refLap.data[0].timestamp ?? 0;
+        timeMax = refLap.data[refLap.data.length - 1].timestamp ?? timeMin;
+        timeSpan = Math.max(1e-9, timeMax - timeMin);
+      }
+      const getXNorm = (s: TelemetryPoint): number => {
+        if (isTimeBased) {
+          return (s.timestamp ?? timeMin) / timeSpan - (timeMin / timeSpan);
+        }
+        return s.normalized_track_position;
+      };
+
+      // Channel traces
       CHANNELS.forEach(ch => {
         if (!visibleChannels.has(ch.key as string)) return;
         laps.forEach(lap => {
           const samples = lap.data;
           if (samples.length < 2) return;
 
-          // Find visible sample range by position
+          // Find visible sample range
           let startI = 0;
           let endI = samples.length - 1;
           for (let i = 0; i < samples.length; i++) {
-            if (samples[i].normalized_track_position >= zStart) {
+            if (getXNorm(samples[i]) >= zStart) {
               startI = Math.max(0, i - 1);
               break;
             }
           }
           for (let i = samples.length - 1; i >= 0; i--) {
-            if (samples[i].normalized_track_position <= zEnd) {
+            if (getXNorm(samples[i]) <= zEnd) {
               endI = Math.min(samples.length - 1, i + 1);
               break;
             }
@@ -125,7 +145,7 @@ function TelemetryGraphCanvas({
           for (let i = startI; i <= endI; i++) {
             const s = samples[i];
             const val = s[ch.key] as number;
-            const x = PAD.left + (s.normalized_track_position - zStart) * xScale;
+            const x = PAD.left + (getXNorm(s) - zStart) * xScale;
             const normalized = (val - ch.min) / (ch.max - ch.min);
             const y = PAD.top + graphHeight * ch.offset + graphHeight * ch.scale * (1 - normalized);
             pts.push([x, y]);
@@ -151,8 +171,7 @@ function TelemetryGraphCanvas({
         });
       });
 
-      // X-axis distance labels — use the first lap as reference
-      const refLap = laps[0];
+      // X-axis labels
       if (refLap && refLap.data.length > 0) {
         ctx.fillStyle = '#475569';
         ctx.font = '9px monospace';
@@ -160,14 +179,20 @@ function TelemetryGraphCanvas({
         const numTicks = 6;
         for (let t = 0; t <= numTicks; t++) {
           const targetPos = zStart + (t / numTicks) * posSpan;
-          // Find sample closest to this position for distance label
-          const idx = Math.max(0, Math.min(
-            refLap.data.length - 1,
-            Math.round(targetPos * (refLap.data.length - 1))
-          ));
-          const dist = refLap.data[idx]?.cumulative_distance ?? 0;
           const x = PAD.left + (t / numTicks) * graphWidth;
-          const label = dist >= 1000 ? `${(dist / 1000).toFixed(2)}km` : `${Math.round(dist)}m`;
+          let label = '';
+          if (isTimeBased) {
+            const targetTime = timeMin + targetPos * timeSpan;
+            const rel = targetTime - timeMax;
+            label = `${rel.toFixed(0)}s`;
+          } else {
+            const idx = Math.max(0, Math.min(
+              refLap.data.length - 1,
+              Math.round(targetPos * (refLap.data.length - 1))
+            ));
+            const dist = refLap.data[idx]?.cumulative_distance ?? 0;
+            label = dist >= 1000 ? `${(dist / 1000).toFixed(2)}km` : `${Math.round(dist)}m`;
+          }
           ctx.fillText(label, x, PAD.top + graphHeight + 16);
         }
       }

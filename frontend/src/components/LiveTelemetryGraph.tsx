@@ -6,7 +6,7 @@ import type { TelemetryPoint } from '@/utils/telemetryAdapter';
 import { Activity, SlidersHorizontal, Lock, Unlock } from 'lucide-react';
 
 const LIVE_DEFAULT_CHANNELS = new Set(['speed_kmh', 'throttle', 'brake', 'rpm']);
-const MAX_BUFFER = 12000;
+const TIME_WINDOW_SECONDS = 30;
 const PAD_L = 50;
 const PAD_R = 60;
 
@@ -35,6 +35,7 @@ function frameToPoint(frame: any): TelemetryPoint | null {
     lap_time: lap?.current_lap_time_ms != null ? lap.current_lap_time_ms / 1000 : undefined,
     sector: lap?.sector ?? 0,
     cumulative_distance: lapDistance,
+    timestamp: performance.now() / 1000,
   };
 }
 
@@ -42,7 +43,6 @@ function LiveTelemetryGraph() {
   const currentFrame = useTelemetryStore(s => s.currentFrame);
 
   const bufferRef = useRef<TelemetryPoint[]>([]);
-  const lastLapNumRef = useRef<number | undefined>(undefined);
   const lastLapTimeRef = useRef<number | undefined>(undefined);
 
   const [lapData, setLapData] = useState<TelemetryPoint[]>([]);
@@ -61,19 +61,9 @@ function LiveTelemetryGraph() {
   const dragStartX = useRef(0);
   const dragStartZoom = useRef<[number, number]>([0, 1]);
 
-  // Accumulate frames into per-lap buffer
+  // Accumulate frames into a rolling time-based buffer
   useEffect(() => {
     if (!currentFrame) return;
-
-    const lapNum = currentFrame.lap?.current_lap_num;
-
-    if (lapNum !== undefined && lastLapNumRef.current !== undefined && lapNum !== lastLapNumRef.current) {
-      bufferRef.current = [];
-      lastLapTimeRef.current = undefined;
-      setZoomRange([0, 1]);
-      setCursorLocked(false);
-    }
-    lastLapNumRef.current = lapNum;
 
     const lapTime = currentFrame.lap?.current_lap_time_ms;
     if (lapTime !== undefined && lapTime === lastLapTimeRef.current) return;
@@ -82,28 +72,23 @@ function LiveTelemetryGraph() {
     const point = frameToPoint(currentFrame);
     if (!point) return;
 
-    const buf = bufferRef.current;
-    if (buf.length >= MAX_BUFFER) buf.shift();
-    buf.push(point);
+    bufferRef.current.push(point);
   }, [currentFrame]);
 
-  // Sync buffer → state at ~5fps to avoid 30fps re-renders
+  // Sync buffer → state at ~5fps, keeping only the last 30 seconds
   useEffect(() => {
     const id = setInterval(() => {
       const buf = bufferRef.current;
       if (buf.length < 2) return;
 
-      // If no track_length arrived yet, normalize by index so graph is usable
-      const hasPos = buf.some(p => p.normalized_track_position > 0);
-      const data: TelemetryPoint[] = hasPos
-        ? [...buf]
-        : buf.map((p, i) => ({
-            ...p,
-            normalized_track_position: i / Math.max(1, buf.length - 1),
-            cumulative_distance: p.lap_time ?? i,
-          }));
+      const now = performance.now() / 1000;
+      const cutoff = now - TIME_WINDOW_SECONDS;
+      // Drop old points
+      while (buf.length > 0 && (buf[0].timestamp ?? 0) < cutoff) {
+        buf.shift();
+      }
 
-      setLapData(data);
+      setLapData([...buf]);
     }, 200);
     return () => clearInterval(id);
   }, []);
@@ -329,6 +314,7 @@ function LiveTelemetryGraph() {
             zoomRange={zoomRange}
             effectivePosition={effectivePosition}
             cursorLocked={cursorLocked}
+            xField="timestamp"
           />
         )}
 
@@ -369,11 +355,9 @@ function LiveTooltip({ sample, visibleChannels, x, y, containerRef }: LiveToolti
   const left = x + OFFSET + TOOLTIP_W > cw ? x - OFFSET - TOOLTIP_W : x + OFFSET;
   const top = Math.max(8, Math.min(ch - TOOLTIP_H_EST - 8, y - TOOLTIP_H_EST / 2));
 
-  const time = sample.lap_time;
-  const dist = sample.cumulative_distance ?? 0;
-  const headerLabel = time != null
-    ? `${time.toFixed(1)}s`
-    : dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${Math.round(dist)} m`;
+  const ts = sample.timestamp;
+  const relTime = ts != null ? `${(-(performance.now() / 1000 - ts)).toFixed(1)}s` : '';
+  const headerLabel = relTime || (sample.lap_time != null ? `${sample.lap_time.toFixed(1)}s` : '');
 
   return (
     <div
@@ -381,7 +365,7 @@ function LiveTooltip({ sample, visibleChannels, x, y, containerRef }: LiveToolti
       style={{ left, top }}
     >
       <div className="text-[10px] text-motorsport-muted mb-2 border-b border-motorsport-border pb-1.5">
-        <span className="font-telemetry">{headerLabel}</span>
+        <span className="font-telemetry">{headerLabel || '—'}</span>
       </div>
       <div className="space-y-1.5">
         {CHANNELS.filter(c => visibleChannels.has(c.key as string)).map(ch => {

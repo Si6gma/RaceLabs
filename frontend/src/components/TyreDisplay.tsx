@@ -9,8 +9,7 @@ interface TyreDisplayProps {
 
 function getCompoundName(compound: number): string {
   const compounds: Record<number, string> = {
-    16: 'C5', 17: 'C4', 18: 'C3', 19: 'C2', 20: 'C1',
-    21: 'INTER', 22: 'WET',
+    16: 'SOFT', 17: 'MEDIUM', 18: 'HARD', 19: 'INTER', 20: 'WET',
   };
   return compounds[compound] || `C${compound}`;
 }

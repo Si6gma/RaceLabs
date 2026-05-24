@@ -41,6 +41,7 @@ interface Props {
   effectivePosition: number;
   cursorLocked: boolean;
   xField?: 'normalized_track_position' | 'timestamp';
+  timeWindow?: number; // seconds, for time-based graphs
 }
 
 function TelemetryGraphCanvas({
@@ -50,9 +51,11 @@ function TelemetryGraphCanvas({
   effectivePosition,
   cursorLocked,
   xField = 'normalized_track_position',
+  timeWindow,
 }: Props) {
   const dataCanvasRef = useRef<HTMLCanvasElement>(null);
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
+  const drawRef = useRef<() => void>(() => {});
 
   // Data layer — traces, grid, labels
   useEffect(() => {
@@ -98,13 +101,14 @@ function TelemetryGraphCanvas({
       let timeMax = 1;
       let timeSpan = 1;
       if (isTimeBased && refLap && refLap.data.length > 0) {
-        timeMin = refLap.data[0].timestamp ?? 0;
-        timeMax = refLap.data[refLap.data.length - 1].timestamp ?? timeMin;
-        timeSpan = Math.max(1e-9, timeMax - timeMin);
+        timeMax = refLap.data[refLap.data.length - 1].timestamp ?? 0;
+        // Anchor domain to a fixed window so the graph scrolls smoothly
+        timeSpan = Math.max(1e-9, timeWindow ?? (timeMax - (refLap.data[0].timestamp ?? 0)));
+        timeMin = timeMax - timeSpan;
       }
       const getXNorm = (s: TelemetryPoint): number => {
         if (isTimeBased) {
-          return (s.timestamp ?? timeMin) / timeSpan - (timeMin / timeSpan);
+          return ((s.timestamp ?? timeMin) - timeMin) / timeSpan;
         }
         return s.normalized_track_position;
       };
@@ -217,13 +221,21 @@ function TelemetryGraphCanvas({
       });
     }
 
+    drawRef.current = draw;
     draw();
-    const observer = new ResizeObserver(draw);
+  }, [laps, visibleChannels, zoomRange, xField, timeWindow]);
+
+  // Persistent ResizeObserver — only created once, calls latest drawRef
+  useEffect(() => {
+    const canvas = dataCanvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver(() => drawRef.current());
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [laps, visibleChannels, zoomRange]);
+  }, []);
 
   // Cursor overlay — vertical line at effectivePosition
+  const cursorDrawRef = useRef<() => void>(() => {});
   useEffect(() => {
     const canvas = cursorCanvasRef.current;
     if (!canvas) return;
@@ -261,11 +273,17 @@ function TelemetryGraphCanvas({
       }
     }
 
+    cursorDrawRef.current = draw;
     draw();
-    const observer = new ResizeObserver(draw);
+  }, [effectivePosition, cursorLocked, zoomRange]);
+
+  useEffect(() => {
+    const canvas = cursorCanvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver(() => cursorDrawRef.current());
     observer.observe(canvas);
     return () => observer.disconnect();
-  }, [effectivePosition, cursorLocked, zoomRange]);
+  }, []);
 
   return (
     <div className="relative w-full h-full">

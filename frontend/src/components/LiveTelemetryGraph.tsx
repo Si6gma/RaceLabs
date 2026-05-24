@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, useCallback } from 'react';
+import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import TelemetryGraphCanvas, { CHANNELS } from '@/components/TelemetryGraphCanvas';
 import ZoomRangeBar from '@/components/ZoomRangeBar';
@@ -75,7 +75,7 @@ function LiveTelemetryGraph() {
     bufferRef.current.push(point);
   }, [currentFrame]);
 
-  // Sync buffer → state at ~5fps, keeping only the last 30 seconds
+  // Sync buffer → state at ~30fps, keeping only the last 30 seconds
   useEffect(() => {
     const id = setInterval(() => {
       const buf = bufferRef.current;
@@ -89,7 +89,7 @@ function LiveTelemetryGraph() {
       }
 
       setLapData([...buf]);
-    }, 200);
+    }, 33);
     return () => clearInterval(id);
   }, []);
 
@@ -228,7 +228,7 @@ function LiveTelemetryGraph() {
     });
   };
 
-  const laps = lapData.length > 0 ? [{ data: lapData, color: '#60a5fa' }] : [];
+  const laps = useMemo(() => lapData.length > 0 ? [{ data: lapData, color: '#60a5fa' }] : [], [lapData]);
 
   return (
     <div className="telemetry-panel flex-1 min-h-0 flex flex-col">
@@ -315,6 +315,7 @@ function LiveTelemetryGraph() {
             effectivePosition={effectivePosition}
             cursorLocked={cursorLocked}
             xField="timestamp"
+            timeWindow={TIME_WINDOW_SECONDS}
           />
         )}
 

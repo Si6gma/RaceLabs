@@ -527,12 +527,10 @@ class F1Decoder:
         F1 22=56 bytes, F1 23=57 bytes, F1 24=58 bytes. teamId is always at offset 3."""
         TEAM_ID_OFFSET = 3
         payload = len(data) - self.HEADER_SIZE - 1  # subtract numActiveCars byte
-        # Pick whichever known size divides the payload most cleanly
-        struct_size = 57  # F1 23 default
-        for candidate in (56, 57, 58):
-            if payload >= num_cars * candidate:
-                struct_size = candidate
-                break
+        # Derive exact struct size by dividing payload by the number of car slots.
+        # The packet always carries 22 slots regardless of numActiveCars.
+        exact = payload / num_cars
+        struct_size = min((56, 57, 58), key=lambda s: abs(s - exact))
         ids = []
         for i in range(num_cars):
             offset = self.HEADER_SIZE + 1 + i * struct_size + TEAM_ID_OFFSET

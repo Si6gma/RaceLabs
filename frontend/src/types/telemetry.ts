@@ -11,6 +11,7 @@ export interface TelemetryFrame {
   damage?: CarDamage;
   session?: SessionData;
   all_lap_distances?: number[];
+  car_team_ids?: number[];
 }
 
 export interface MotionData {

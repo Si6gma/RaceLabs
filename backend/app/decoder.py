@@ -273,6 +273,7 @@ class TelemetryFrame:
     damage: Optional[CarDamage] = None
     session: Optional[SessionData] = None
     all_lap_distances: List[float] = field(default_factory=list)
+    car_team_ids: List[int] = field(default_factory=list)
     timestamp: float = 0.0
 
 
@@ -327,6 +328,8 @@ class F1Decoder:
             elif packet_type == PacketType.LAP_DATA:
                 frame.lap = self._decode_lap_data(data, player_car)
                 frame.all_lap_distances = self._decode_all_lap_distances(data)
+            elif packet_type == PacketType.PARTICIPANTS:
+                frame.car_team_ids = self._decode_participants(data)
             elif packet_type == PacketType.CAR_TELEMETRY:
                 frame.telemetry = self._decode_car_telemetry(data, player_car)
             elif packet_type == PacketType.CAR_STATUS:
@@ -519,6 +522,19 @@ class F1Decoder:
         except Exception:
             return CarDamage()
 
+    def _decode_participants(self, data: bytes, num_cars: int = 22) -> List[int]:
+        """Extract team IDs for all participants. F1 23 ParticipantData is 57 bytes; teamId at offset 3."""
+        STRUCT_SIZE = 57
+        TEAM_ID_OFFSET = 3
+        ids = []
+        for i in range(num_cars):
+            offset = self.HEADER_SIZE + 1 + i * STRUCT_SIZE + TEAM_ID_OFFSET
+            try:
+                ids.append(struct.unpack_from('<B', data, offset)[0])
+            except Exception:
+                ids.append(255)
+        return ids
+
     def _decode_all_lap_distances(self, data: bytes, num_cars: int = 22) -> List[float]:
         """Extract lap_distance for every car. lap_distance is a float at byte +18 within each 50-byte car block."""
         distances = []
@@ -686,6 +702,9 @@ class F1Decoder:
 
         if frame.all_lap_distances:
             result["all_lap_distances"] = frame.all_lap_distances
+
+        if frame.car_team_ids:
+            result["car_team_ids"] = frame.car_team_ids
 
         if frame.session:
             result["session"] = {

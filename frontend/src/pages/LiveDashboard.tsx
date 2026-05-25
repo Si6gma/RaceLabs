@@ -54,6 +54,7 @@ function LiveDashboard() {
           trackLength={currentFrame?.session?.track_length}
           playerCarIndex={currentFrame?.player_car_index}
           allLapDistances={currentFrame?.all_lap_distances}
+          carTeamIds={currentFrame?.car_team_ids}
           posX={m?.world_pos_x}
           posZ={m?.world_pos_z}
           lapNumber={l?.current_lap_num}
@@ -112,19 +113,10 @@ function LiveDashboard() {
 
           {/* Lap Info */}
           <div className="col-span-3 telemetry-panel p-2 flex flex-col justify-between">
-            <div className="flex items-end justify-between">
-              <div>
-                <span className="telemetry-label">CURRENT</span>
-                <div className="font-telemetry text-xl font-bold text-motorsport-text">
-                  {formatTime(l?.current_lap_time_ms || 0)}
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-motorsport-muted">LAP</span>
-                <span className="font-telemetry text-base font-bold text-motorsport-orange">
-                  {l?.current_lap_num || '--'}
-                  {session?.total_laps ? <span className="text-[10px] text-motorsport-muted font-normal">/{session.total_laps}</span> : null}
-                </span>
+            <div>
+              <span className="telemetry-label">CURRENT</span>
+              <div className="font-telemetry text-xl font-bold text-motorsport-text">
+                {formatTime(l?.current_lap_time_ms || 0)}
               </div>
             </div>
 
@@ -147,24 +139,35 @@ function LiveDashboard() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 mt-1 pt-1 border-t border-motorsport-border/40">
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-motorsport-muted">POS</span>
-                <span className="font-telemetry text-sm font-bold text-motorsport-orange">
-                  {l?.car_position || '--'}
-                </span>
+            <div className="mt-1 pt-1 border-t border-motorsport-border/40 space-y-1">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-motorsport-muted">POS</span>
+                  <span className="font-telemetry text-sm font-bold text-motorsport-orange">
+                    {l?.car_position || '--'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-motorsport-muted">BEST</span>
+                  <span className="font-telemetry text-xs text-motorsport-cyan">
+                    {session?.best_lap_time ? formatTime(session.best_lap_time) : '--:--'}
+                  </span>
+                </div>
+                {l?.current_lap_invalid && (
+                  <span className="ml-auto text-[10px] px-1 py-0.5 bg-motorsport-red/20 text-motorsport-red border border-motorsport-red/30 rounded-sm">
+                    INVALID
+                  </span>
+                )}
               </div>
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] text-motorsport-muted">BEST</span>
-                <span className="font-telemetry text-xs text-motorsport-cyan">
-                  {session?.best_lap_time ? formatTime(session.best_lap_time) : '--:--'}
-                </span>
+              <div className="flex justify-end">
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-motorsport-muted">LAP</span>
+                  <span className="font-telemetry text-base font-bold text-motorsport-orange">
+                    {l?.current_lap_num || '--'}
+                    {session?.total_laps ? <span className="text-[10px] text-motorsport-muted font-normal">/{session.total_laps}</span> : null}
+                  </span>
+                </div>
               </div>
-              {l?.current_lap_invalid && (
-                <span className="ml-auto text-[10px] px-1 py-0.5 bg-motorsport-red/20 text-motorsport-red border border-motorsport-red/30 rounded-sm">
-                  INVALID
-                </span>
-              )}
             </div>
           </div>
 

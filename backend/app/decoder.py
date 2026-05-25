@@ -523,12 +523,19 @@ class F1Decoder:
             return CarDamage()
 
     def _decode_participants(self, data: bytes, num_cars: int = 22) -> List[int]:
-        """Extract team IDs for all participants. F1 23 ParticipantData is 57 bytes; teamId at offset 3."""
-        STRUCT_SIZE = 57
+        """Extract team IDs for all participants. Auto-detects struct size from packet length.
+        F1 22=56 bytes, F1 23=57 bytes, F1 24=58 bytes. teamId is always at offset 3."""
         TEAM_ID_OFFSET = 3
+        payload = len(data) - self.HEADER_SIZE - 1  # subtract numActiveCars byte
+        # Pick whichever known size divides the payload most cleanly
+        struct_size = 57  # F1 23 default
+        for candidate in (56, 57, 58):
+            if payload >= num_cars * candidate:
+                struct_size = candidate
+                break
         ids = []
         for i in range(num_cars):
-            offset = self.HEADER_SIZE + 1 + i * STRUCT_SIZE + TEAM_ID_OFFSET
+            offset = self.HEADER_SIZE + 1 + i * struct_size + TEAM_ID_OFFSET
             try:
                 ids.append(struct.unpack_from('<B', data, offset)[0])
             except Exception:

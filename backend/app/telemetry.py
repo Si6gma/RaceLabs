@@ -155,6 +155,7 @@ class SessionState:
     current_lap_invalid: bool = False
     num_pit_stops: int = 0
     car_position: int = 0
+    car_team_ids: List[int] = field(default_factory=list)
 
 
 class TelemetryPipeline:
@@ -195,6 +196,13 @@ class TelemetryPipeline:
                 self.session_state = SessionState(session_id=f"sess_{int(time.time())}")
                 self.session_state.is_active = True
                 
+            if frame_dict.get("car_team_ids"):
+                self.session_state.car_team_ids = frame_dict["car_team_ids"]
+
+            # Re-attach persisted team IDs to every frame so the frontend always has them
+            if self.session_state.car_team_ids and "car_team_ids" not in frame_dict:
+                frame_dict["car_team_ids"] = self.session_state.car_team_ids
+
             if "session" in frame_dict:
                 s = frame_dict["session"]
                 new_track = self._track_name(s.get("track_id", -1))

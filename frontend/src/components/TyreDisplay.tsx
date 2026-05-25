@@ -7,11 +7,16 @@ interface TyreDisplayProps {
   compound?: number;
 }
 
-function getCompoundName(compound: number): string {
-  const compounds: Record<number, string> = {
-    16: 'SOFT', 17: 'MEDIUM', 18: 'HARD', 19: 'INTER', 20: 'WET',
-  };
-  return compounds[compound] || `C${compound}`;
+const COMPOUND_META: Record<number, { name: string; color: string }> = {
+  16: { name: 'SOFT',   color: '#FF3333' },
+  17: { name: 'MEDIUM', color: '#FFCC00' },
+  18: { name: 'HARD',   color: '#FFFFFF' },
+  19: { name: 'INTER',  color: '#00C651' },
+  20: { name: 'WET',    color: '#0096D5' },
+};
+
+function getCompoundMeta(compound: number) {
+  return COMPOUND_META[compound] ?? { name: compound ? `C${compound}` : 'Unknown', color: '#888888' };
 }
 
 /**
@@ -29,7 +34,7 @@ function getCompoundName(compound: number): string {
  *     • > 105°C  → Overheating (red)
  */
 function getBarTheme(
-  value: number,
+  _wear: number,
   temp: number
 ): {
   fill: string;
@@ -37,8 +42,8 @@ function getBarTheme(
   text: string;
   glow?: string;
 } {
-  // ── Unknown / inactive state ──
-  if (value === 0 || temp === 0) {
+  // ── Unknown / inactive state (no telemetry) ──
+  if (temp === 0) {
     return {
       fill: '#475569',   // slate-600  – muted fill
       track: '#1e293b',  // slate-800  – dark track
@@ -81,14 +86,15 @@ function TyreDisplay({
   compound = 0,
 }: TyreDisplayProps) {
   const labels = ['FL', 'FR', 'RL', 'RR'];
+  const meta = getCompoundMeta(compound);
 
   return (
     <div className="flex flex-col gap-2">
       {/* Header */}
       <div className="flex items-center justify-between">
         <span className="telemetry-label">TYRES</span>
-        <span className="text-[10px] text-motorsport-muted font-medium">
-          {compound ? getCompoundName(compound) : 'Unknown'}
+        <span className="text-[10px] font-bold tracking-wider" style={{ color: meta.color }}>
+          {meta.name}
         </span>
       </div>
 
@@ -96,12 +102,13 @@ function TyreDisplay({
       <div className="grid grid-cols-2 gap-2">
         {labels.map((label, i) => {
           const temp = temps[i] || 0;
-          const value = wear[i] || 0;
-          const theme = getBarTheme(value, temp);
+          const wearPct = wear[i] || 0;
+          const health = Math.max(0, 100 - wearPct);   // 100% = new tyre
+          const theme = getBarTheme(wearPct, temp);
 
-          const isUnknown = value === 0 || temp === 0;
-          const displayValue = isUnknown ? 'Unknown' : `${value.toFixed(0)}%`;
-          const barWidth = isUnknown ? '0%' : `${Math.min(100, value)}%`;
+          const isUnknown = temp === 0;
+          const displayValue = isUnknown ? '--' : `${health.toFixed(0)}%`;
+          const barWidth = isUnknown ? '0%' : `${Math.min(100, health)}%`;
 
           return (
             <div

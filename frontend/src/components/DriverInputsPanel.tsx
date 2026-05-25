@@ -68,7 +68,7 @@ function InputBar({
   return (
     <div className="flex flex-col items-center gap-1">
       <span className="eng-label">{label}</span>
-      <div className="relative w-7 h-20 bg-motorsport-dark rounded-sm overflow-hidden">
+      <div className="relative w-7 h-16 bg-motorsport-dark rounded-sm overflow-hidden">
         <div
           className="absolute bottom-0 w-full transition-[height] duration-75 ease-linear"
           style={{ height: `${pct}%`, backgroundColor: color }}
@@ -122,14 +122,14 @@ function DriverInputsPanel() {
         </span>
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col gap-2 p-2">
+      <div className="flex-1 min-h-0 flex flex-col gap-1.5 p-2">
         {/* Speed + Gear row */}
-        <div className="flex items-end gap-3">
+        <div className="flex items-end gap-2">
           <div className="flex flex-col">
             <span className="eng-label">SPEED</span>
             <span
               className="font-telemetry font-bold leading-none tabular-nums"
-              style={{ fontSize: '2.6rem', color: '#00E5FF' }}
+              style={{ fontSize: '2.4rem', color: '#00E5FF' }}
             >
               {speed.toFixed(0)}
             </span>
@@ -140,7 +140,7 @@ function DriverInputsPanel() {
             <span className="eng-label">GEAR</span>
             <span
               className="font-telemetry font-black leading-none tabular-nums"
-              style={{ fontSize: '4rem', color: gearColor }}
+              style={{ fontSize: '3.4rem', color: gearColor }}
             >
               {formatGear(gear)}
             </span>
@@ -158,8 +158,8 @@ function DriverInputsPanel() {
           <ShiftLights revPercent={revPct} />
         </div>
 
-        {/* Throttle + Brake bars + micro-trace */}
-        <div className="flex items-end gap-2 mt-auto">
+        {/* Throttle + Brake bars + micro-trace — no mt-auto, flows naturally */}
+        <div className="flex items-end gap-2">
           <InputBar label="THR" value={throttle} color="#00FF88" />
           <InputBar label="BRK" value={brake}    color="#FF3333" />
           <div className="flex flex-col gap-1 flex-1">
@@ -171,7 +171,7 @@ function DriverInputsPanel() {
         </div>
 
         {/* G-Force readout */}
-        <div className="flex gap-3 pt-1 border-t border-motorsport-border/40">
+        <div className="flex gap-2 pt-1 border-t border-motorsport-border/40">
           <div>
             <span className="eng-label">LAT G</span>
             <div className="font-telemetry text-xs tabular-nums" style={{ color: Math.abs(latG) > 3 ? '#FF3333' : '#cdd9e5' }}>
@@ -184,8 +184,8 @@ function DriverInputsPanel() {
               {lonG >= 0 ? '+' : ''}{lonG.toFixed(2)}
             </div>
           </div>
-          <div className="ml-auto">
-            <span className="eng-label">RESULTANT</span>
+          <div className="ml-auto text-right">
+            <span className="eng-label">RESULT</span>
             <div className="font-telemetry text-xs tabular-nums text-motorsport-text">
               {gMag.toFixed(2)}G
             </div>

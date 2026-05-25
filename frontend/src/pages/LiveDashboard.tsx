@@ -49,14 +49,12 @@ function LiveDashboard() {
       {/* ── Main row ── */}
       <div className="flex gap-1.5 flex-1 min-h-0">
 
-        {/* Left column: Driver Inputs (top) + Tyre Analytics (bottom) */}
-        <div className="flex flex-col gap-1.5 w-[220px] shrink-0">
-          {/* Driver inputs takes ~55% of left col height */}
-          <div className="flex-[55] min-h-0">
+        {/* Left column: Driver Inputs (top 60%) + Tyre Analytics (bottom 40%) */}
+        <div className="grid gap-1.5 w-[220px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
+          <div className="min-h-0">
             <DriverInputsPanel />
           </div>
-          {/* Tyre analytics takes remaining ~45% */}
-          <div className="flex-[45] min-h-0">
+          <div className="min-h-0">
             <TyreAnalytics
               surfaceTemps={t?.tyres_surface_temp}
               innerTemps={t?.tyres_inner_temp}
@@ -83,19 +81,19 @@ function LiveDashboard() {
           />
         </div>
 
-        {/* Right column: Timing Tower (top) + ERS Suite (bottom) */}
-        <div className="flex flex-col gap-1.5 w-[200px] shrink-0">
-          <div className="flex-[60] min-h-0">
+        {/* Right column: Timing Tower (top 60%) + ERS Suite (bottom 40%) */}
+        <div className="grid gap-1.5 w-[200px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
+          <div className="min-h-0">
             <TimingTower />
           </div>
-          <div className="flex-[40] min-h-0">
+          <div className="min-h-0">
             <ERSSuite />
           </div>
         </div>
       </div>
 
       {/* ── Telemetry Trace Timeline ── */}
-      <div className="h-[300px] shrink-0">
+      <div className="h-[320px] shrink-0">
         <TelemetryTimeline />
       </div>
     </div>

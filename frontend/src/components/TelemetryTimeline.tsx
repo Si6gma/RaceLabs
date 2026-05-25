@@ -52,12 +52,12 @@ const GRID_STROKE = '#1e2d3d';
 // ── Speed channel ────────────────────────────────────────────────
 function SpeedChart({ data }: { data: DataPoint[] }) {
   return (
-    <div style={{ height: 90 }}>
+    <div style={{ height: 80 }}>
       <div className="flex items-center gap-2 px-2 pt-1 pb-0.5">
         <span className="eng-label">SPEED</span>
         <span className="font-telemetry text-[9px] text-eng-cyan">km/h</span>
       </div>
-      <ResponsiveContainer width="100%" height={72}>
+      <ResponsiveContainer width="100%" height={62}>
         <ComposedChart data={data} syncId="timeline" margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke={GRID_STROKE} />
           <XAxis dataKey="dist" hide type="number" domain={['dataMin', 'dataMax']} />
@@ -78,14 +78,14 @@ function SpeedChart({ data }: { data: DataPoint[] }) {
 // ── Throttle + Brake channel ─────────────────────────────────────
 function InputsChart({ data }: { data: DataPoint[] }) {
   return (
-    <div style={{ height: 80 }}>
+    <div style={{ height: 72 }}>
       <div className="flex items-center gap-2 px-2 pt-1 pb-0.5">
         <span className="eng-label">THROTTLE</span>
         <span className="font-telemetry text-[9px]" style={{ color: '#00FF88' }}>▬</span>
         <span className="eng-label">BRAKE</span>
         <span className="font-telemetry text-[9px]" style={{ color: '#FF3333' }}>▬</span>
       </div>
-      <ResponsiveContainer width="100%" height={62}>
+      <ResponsiveContainer width="100%" height={54}>
         <ComposedChart data={data} syncId="timeline" margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke={GRID_STROKE} />
           <XAxis dataKey="dist" hide type="number" domain={['dataMin', 'dataMax']} />
@@ -107,11 +107,11 @@ function InputsChart({ data }: { data: DataPoint[] }) {
 // ── Gear channel ─────────────────────────────────────────────────
 function GearChart({ data }: { data: DataPoint[] }) {
   return (
-    <div style={{ height: 62 }}>
+    <div style={{ height: 58 }}>
       <div className="flex items-center gap-2 px-2 pt-1 pb-0.5">
         <span className="eng-label">GEAR</span>
       </div>
-      <ResponsiveContainer width="100%" height={46}>
+      <ResponsiveContainer width="100%" height={42}>
         <ComposedChart data={data} syncId="timeline" margin={{ left: 0, right: 0, top: 0, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke={GRID_STROKE} />
           <XAxis dataKey="dist" hide type="number" domain={['dataMin', 'dataMax']} />
@@ -132,11 +132,11 @@ function GearChart({ data }: { data: DataPoint[] }) {
 // ── Steering channel ─────────────────────────────────────────────
 function SteerChart({ data }: { data: DataPoint[] }) {
   return (
-    <div style={{ height: 70 }}>
+    <div style={{ height: 75 }}>
       <div className="flex items-center gap-2 px-2 pt-1 pb-0.5">
         <span className="eng-label">STEERING</span>
       </div>
-      <ResponsiveContainer width="100%" height={54}>
+      <ResponsiveContainer width="100%" height={57}>
         <ComposedChart data={data} syncId="timeline" margin={{ left: 0, right: 0, top: 2, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke={GRID_STROKE} />
           <XAxis

@@ -1,263 +1,102 @@
-import { memo, useMemo, useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
-import { formatTime, formatGear, formatSpeed } from '@/utils/formatters';
-import { getHeatColor } from '@/utils/colors';
-import RPMBar from '@/components/RPMBar';
-import TelemetryGauge from '@/components/TelemetryGauge';
-import SteeringWheel from '@/components/SteeringWheel';
-import TyreDisplay from '@/components/TyreDisplay';
-import DRSIndicator from '@/components/DRSIndicator';
-import ERSIndicator from '@/components/ERSIndicator';
-import GForceCircle from '@/components/GForceCircle';
 import { MiniTrackMapMemo } from '@/components/TrackMapCanvas';
+import DriverInputsPanel from '@/components/DriverInputsPanel';
+import TyreAnalytics from '@/components/TyreAnalytics';
+import TimingTower from '@/components/TimingTower';
+import ERSSuite from '@/components/ERSSuite';
+import TelemetryTimeline from '@/components/TelemetryTimeline';
 
 function LiveDashboard() {
   const currentFrame = useTelemetryStore(s => s.currentFrame);
-  const session = useTelemetryStore(s => s.session);
-  const setSession = useTelemetryStore(s => s.setSession);
+  const setSession   = useTelemetryStore(s => s.setSession);
 
   const t = currentFrame?.telemetry;
+  const m = currentFrame?.motion;
   const l = currentFrame?.lap;
   const s = currentFrame?.status;
-  const m = currentFrame?.motion;
 
+  // Poll session metadata every 5 s
   useEffect(() => {
     const poll = async () => {
       try {
         const res = await fetch('/api/session');
         if (res.ok) {
           const data = await res.json();
-          if (data && data.session_id) setSession(data);
+          if (data?.session_id) setSession(data);
         }
-      } catch {}
+      } catch { /* swallow */ }
     };
     poll();
     const id = setInterval(poll, 5000);
     return () => clearInterval(id);
   }, [setSession]);
 
-  const speedKmh = useMemo(() => (t?.speed || 0), [t?.speed]);
-  const gear = useMemo(() => (t?.gear || 0), [t?.gear]);
-  const rpm = useMemo(() => (t?.engine_rpm || 0), [t?.engine_rpm]);
-  const maxRpm = useMemo(() => 15000, []);
-  const avgBrakeTemp = useMemo(() =>
-    t?.brakes_temp ? t.brakes_temp.reduce((a, b) => a + b, 0) / 4 : 0,
-    [t?.brakes_temp]
-  );
-
   return (
-    <div className="h-full flex flex-col gap-2 p-2 overflow-hidden">
-      {/* ── Main: Large Track Map ── */}
-      <div className="flex-1 min-h-0 telemetry-panel p-2">
-        <MiniTrackMapMemo
-          trackId={currentFrame?.session?.track_id}
-          trackLength={currentFrame?.session?.track_length}
-          playerCarIndex={currentFrame?.player_car_index}
-          allLapDistances={currentFrame?.all_lap_distances}
-          carTeamIds={currentFrame?.car_team_ids}
-          posX={m?.world_pos_x}
-          posZ={m?.world_pos_z}
-          lapNumber={l?.current_lap_num}
-          sessionType={currentFrame?.session?.session_type}
-        />
-      </div>
+    /*
+     * Top-level layout:
+     *   ┌──────────────────────────────────────────────────────────┐
+     *   │ main-row  (flex-1, ~65% height)                         │
+     *   │  ├── left-col  220 px  (DriverInputs + TyreAnalytics)   │
+     *   │  ├── center    flex-1  (Track Map)                       │
+     *   │  └── right-col 200 px  (TimingTower + ERSSuite)         │
+     *   ├──────────────────────────────────────────────────────────┤
+     *   │ timeline (300 px fixed, Recharts multi-channel trace)    │
+     *   └──────────────────────────────────────────────────────────┘
+     */
+    <div className="h-full flex flex-col gap-1.5 p-1.5 overflow-hidden bg-motorsport-black">
 
-      {/* ── Data Widgets (compact) ── */}
-      <div className="shrink-0 flex flex-col gap-2">
-        {/* Row 1: Speed | Gear+RPM+Inputs | Lap | DRS/ERS */}
-        <div className="grid grid-cols-12 gap-2">
-          {/* Speed */}
-          <div className="col-span-2 telemetry-panel p-2 flex flex-col items-center justify-center">
-            <span className="telemetry-label mb-0.5">SPEED</span>
-            <div className="flex items-baseline gap-1">
-              <span className="font-telemetry text-4xl font-bold text-motorsport-cyan text-glow-cyan">
-                {formatSpeed(speedKmh)}
-              </span>
-              <span className="text-xs text-motorsport-muted">km/h</span>
-            </div>
+      {/* ── Main row ── */}
+      <div className="flex gap-1.5 flex-1 min-h-0">
+
+        {/* Left column: Driver Inputs (top) + Tyre Analytics (bottom) */}
+        <div className="flex flex-col gap-1.5 w-[220px] shrink-0">
+          {/* Driver inputs takes ~55% of left col height */}
+          <div className="flex-[55] min-h-0">
+            <DriverInputsPanel />
           </div>
-
-          {/* Gear + RPM + Throttle + Brake */}
-          <div className="col-span-5 telemetry-panel p-2 flex flex-col gap-1.5 justify-center">
-            <div className="flex items-center gap-2">
-              <span className={`font-telemetry text-2xl font-bold leading-none ${
-                gear >= 7 ? 'text-motorsport-red' :
-                  gear >= 5 ? 'text-motorsport-orange' :
-                    'text-motorsport-text'
-              }`}>
-                {formatGear(gear)}
-              </span>
-              <div className="flex-1">
-                <RPMBar rpm={rpm} maxRpm={maxRpm} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <TelemetryGauge
-                label="THROTTLE"
-                value={(t?.throttle || 0) * 100}
-                max={100}
-                color="#00e676"
-                unit="%"
-                showBar
-              />
-              <TelemetryGauge
-                label="BRAKE"
-                value={(t?.brake || 0) * 100}
-                max={100}
-                color="#ff1744"
-                unit="%"
-                showBar
-              />
-            </div>
-          </div>
-
-          {/* Lap Info */}
-          <div className="col-span-3 telemetry-panel p-2 flex flex-col justify-between">
-            <div>
-              <span className="telemetry-label">CURRENT</span>
-              <div className="font-telemetry text-xl font-bold text-motorsport-text">
-                {formatTime(l?.current_lap_time_ms || 0)}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-1 mt-1">
-              <div>
-                <span className="telemetry-label">S1</span>
-                <div className="font-telemetry text-xs text-motorsport-muted">{formatTime(l?.sector1_time_ms || 0)}</div>
-              </div>
-              <div>
-                <span className="telemetry-label">S2</span>
-                <div className="font-telemetry text-xs text-motorsport-muted">{formatTime(l?.sector2_time_ms || 0)}</div>
-              </div>
-              <div>
-                <span className="telemetry-label">S3</span>
-                <div className="font-telemetry text-xs text-motorsport-muted">
-                  {l?.last_lap_time_ms && l?.sector1_time_ms != null && l?.sector2_time_ms != null
-                    ? formatTime(Math.max(0, l.last_lap_time_ms - l.sector1_time_ms - l.sector2_time_ms))
-                    : '--:--'}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-1 pt-1 border-t border-motorsport-border/40 space-y-1">
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-motorsport-muted">POS</span>
-                  <span className="font-telemetry text-sm font-bold text-motorsport-orange">
-                    {l?.car_position || '--'}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-motorsport-muted">BEST</span>
-                  <span className="font-telemetry text-xs text-motorsport-cyan">
-                    {session?.best_lap_time ? formatTime(session.best_lap_time) : '--:--'}
-                  </span>
-                </div>
-                {l?.current_lap_invalid && (
-                  <span className="ml-auto text-[10px] px-1 py-0.5 bg-motorsport-red/20 text-motorsport-red border border-motorsport-red/30 rounded-sm">
-                    INVALID
-                  </span>
-                )}
-              </div>
-              <div className="flex justify-end">
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-motorsport-muted">LAP</span>
-                  <span className="font-telemetry text-base font-bold text-motorsport-orange">
-                    {l?.current_lap_num || '--'}
-                    {session?.total_laps ? <span className="text-[10px] text-motorsport-muted font-normal">/{session.total_laps}</span> : null}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* DRS & ERS */}
-          <div className="col-span-2 telemetry-panel p-2 flex flex-col gap-1.5 justify-center">
-            <div className="flex flex-row gap-2 items-center justify-center">
-              <DRSIndicator active={t?.drs === 1} allowed={s?.drs_allowed === 1} />
-              <ERSIndicator deployMode={s?.ers_deploy_mode || 0} />
-            </div>
-            <div className="w-full">
-              <div className="flex gap-0.5 h-2.5">
-                {Array.from({ length: 10 }).map((_, i) => {
-                  const percent = Math.min(100, Math.max(0, ((s?.ers_store_energy || 0) / 4000000) * 100));
-                  const filled = i < Math.ceil(percent / 10);
-                  return (
-                    <div
-                      key={i}
-                      className={`flex-1 rounded-sm transition-colors duration-150 ${filled ? 'bg-yellow-400' : 'bg-motorsport-black'}`}
-                    />
-                  );
-                })}
-              </div>
-              <div className="text-center mt-0.5">
-                <span className="font-telemetry text-[10px] text-yellow-400 tabular-nums">
-                  {Math.min(100, Math.max(0, ((s?.ers_store_energy || 0) / 4000000) * 100)).toFixed(0)}%
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Row 2: Steering | G-Force | Temps | Tyres */}
-        <div className="grid grid-cols-12 gap-2">
-          {/* Steering */}
-          <div className="col-span-2 telemetry-panel p-2 flex items-center justify-center">
-            <SteeringWheel steer={t?.steer || 0} size={90} />
-          </div>
-
-          {/* G-Force */}
-          <div className="col-span-2 telemetry-panel p-2 flex items-center justify-center">
-            <GForceCircle latG={m?.g_force_lat || 0} longG={m?.g_force_lon || 0} size={90} />
-          </div>
-
-          {/* Temps */}
-          <div className="col-span-4 telemetry-panel p-2 flex flex-col gap-1.5 justify-center">
-            <div className="grid grid-cols-2 gap-2">
-              <TelemetryGauge
-                label="ENGINE"
-                value={t?.engine_temp || 0}
-                max={150}
-                unit="°C"
-                color={getHeatColor(t?.engine_temp || 0, 105, 125, 'ascending')}
-              />
-              <TelemetryGauge
-                label="BRAKE AVG"
-                value={avgBrakeTemp}
-                max={1200}
-                unit="°C"
-                color={getHeatColor(avgBrakeTemp, 500, 950, 'ascending')}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <TelemetryGauge
-                label="FUEL"
-                value={s?.fuel_in_tank || 0}
-                max={s?.fuel_capacity || 110}
-                unit="kg"
-                color={getHeatColor(s?.fuel_in_tank || 0, 80, 30, 'descending')}
-                precision={1}
-              />
-              <TelemetryGauge
-                label="LAPS LEFT"
-                value={s?.fuel_remaining_laps || 0}
-                max={100}
-                color={getHeatColor(s?.fuel_remaining_laps || 0, 25, 8, 'descending')}
-                precision={1}
-              />
-            </div>
-          </div>
-
-          {/* Tyres */}
-          <div className="col-span-4 telemetry-panel p-2">
-            <TyreDisplay
-              temps={t?.tyres_surface_temp}
-              wear={currentFrame?.damage?.tyres_wear}
+          {/* Tyre analytics takes remaining ~45% */}
+          <div className="flex-[45] min-h-0">
+            <TyreAnalytics
+              surfaceTemps={t?.tyres_surface_temp}
+              innerTemps={t?.tyres_inner_temp}
               pressures={t?.tyres_pressure}
+              wear={currentFrame?.damage?.tyres_wear}
               compound={s?.tyre_compound}
+              tyreAgeLaps={s?.tyres_age_laps}
             />
           </div>
         </div>
+
+        {/* Center: Track Map — fills all remaining width */}
+        <div className="flex-1 min-w-0 telemetry-panel p-1.5">
+          <MiniTrackMapMemo
+            trackId={currentFrame?.session?.track_id}
+            trackLength={currentFrame?.session?.track_length}
+            playerCarIndex={currentFrame?.player_car_index}
+            allLapDistances={currentFrame?.all_lap_distances}
+            carTeamIds={currentFrame?.car_team_ids}
+            posX={m?.world_pos_x}
+            posZ={m?.world_pos_z}
+            lapNumber={l?.current_lap_num}
+            sessionType={currentFrame?.session?.session_type}
+          />
+        </div>
+
+        {/* Right column: Timing Tower (top) + ERS Suite (bottom) */}
+        <div className="flex flex-col gap-1.5 w-[200px] shrink-0">
+          <div className="flex-[60] min-h-0">
+            <TimingTower />
+          </div>
+          <div className="flex-[40] min-h-0">
+            <ERSSuite />
+          </div>
+        </div>
+      </div>
+
+      {/* ── Telemetry Trace Timeline ── */}
+      <div className="h-[300px] shrink-0">
+        <TelemetryTimeline />
       </div>
     </div>
   );

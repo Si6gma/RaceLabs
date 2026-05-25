@@ -272,6 +272,7 @@ class TelemetryFrame:
     status: Optional[CarStatus] = None
     damage: Optional[CarDamage] = None
     session: Optional[SessionData] = None
+    all_lap_distances: List[float] = field(default_factory=list)
     timestamp: float = 0.0
 
 
@@ -325,6 +326,7 @@ class F1Decoder:
                 frame.motion = self._decode_motion(data, player_car)
             elif packet_type == PacketType.LAP_DATA:
                 frame.lap = self._decode_lap_data(data, player_car)
+                frame.all_lap_distances = self._decode_all_lap_distances(data)
             elif packet_type == PacketType.CAR_TELEMETRY:
                 frame.telemetry = self._decode_car_telemetry(data, player_car)
             elif packet_type == PacketType.CAR_STATUS:
@@ -517,6 +519,18 @@ class F1Decoder:
         except Exception:
             return CarDamage()
 
+    def _decode_all_lap_distances(self, data: bytes, num_cars: int = 22) -> List[float]:
+        """Extract lap_distance for every car. lap_distance is a float at byte +18 within each 50-byte car block."""
+        distances = []
+        for i in range(num_cars):
+            offset = self.HEADER_SIZE + i * 50 + 18
+            try:
+                dist = struct.unpack_from('<f', data, offset)[0]
+                distances.append(round(dist, 1))
+            except Exception:
+                distances.append(0.0)
+        return distances
+
     def _decode_session(self, data: bytes) -> SessionData:
         # Session data: sparse fields with gaps (marshal zones, etc.)
         # Group adjacent same-type fields where possible
@@ -669,6 +683,9 @@ class F1Decoder:
                 "gear_box_damage": frame.damage.gear_box_damage,
                 "engine_damage": frame.damage.engine_damage,
             }
+
+        if frame.all_lap_distances:
+            result["all_lap_distances"] = frame.all_lap_distances
 
         if frame.session:
             result["session"] = {

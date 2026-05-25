@@ -244,10 +244,13 @@ function LiveDashboard() {
           {/* Mini Track Map */}
           <div className="col-span-1 telemetry-panel p-2 flex items-center justify-center">
             <MiniTrackMapMemo
+              trackId={currentFrame?.session?.track_id}
+              trackLength={currentFrame?.session?.track_length}
+              playerCarIndex={currentFrame?.player_car_index}
+              allLapDistances={currentFrame?.all_lap_distances}
               posX={m?.world_pos_x}
               posZ={m?.world_pos_z}
               lapNumber={l?.current_lap_num}
-              trackId={currentFrame?.session?.track_id}
               sessionType={currentFrame?.session?.session_type}
             />
           </div>

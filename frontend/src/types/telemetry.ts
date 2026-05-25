@@ -10,6 +10,7 @@ export interface TelemetryFrame {
   status?: CarStatus;
   damage?: CarDamage;
   session?: SessionData;
+  all_lap_distances?: number[];
 }
 
 export interface MotionData {

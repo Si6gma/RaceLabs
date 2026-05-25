@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useState, useEffect } from 'react';
 import {
   ComposedChart, Line, Area, XAxis, YAxis,
   ResponsiveContainer, Tooltip, ReferenceLine, CartesianGrid,
@@ -14,35 +14,43 @@ interface DataPoint {
   steer: number;
 }
 
-function useTimelineData(): DataPoint[] {
-  const frameHistory = useTelemetryStore(s => s.frameHistory);
-  const currentLap   = useTelemetryStore(s => s.currentFrame?.lap?.current_lap_num);
+function buildDataPoints(): DataPoint[] {
+  const { frameHistory, currentFrame } = useTelemetryStore.getState();
+  const currentLap = currentFrame?.lap?.current_lap_num;
+  if (!frameHistory.length || currentLap == null) return [];
 
-  return useMemo(() => {
-    if (!frameHistory.length || currentLap == null) return [];
-    const raw = frameHistory.filter(
-      f => f.lap?.current_lap_num === currentLap
-        && f.lap.lap_distance != null
-        && f.telemetry != null,
-    );
-    // Dedupe by distance bucket (every 5 m) so fast laps still look clean
-    const seen = new Set<number>();
-    const out: DataPoint[] = [];
-    for (const f of raw) {
-      const bucket = Math.round(f.lap!.lap_distance / 5) * 5;
-      if (seen.has(bucket)) continue;
-      seen.add(bucket);
-      out.push({
-        dist:     bucket,
-        speed:    f.telemetry!.speed,
-        throttle: +(f.telemetry!.throttle * 100).toFixed(1),
-        brake:    +(f.telemetry!.brake    * 100).toFixed(1),
-        gear:     f.telemetry!.gear,
-        steer:    +f.telemetry!.steer.toFixed(3),
-      });
-    }
-    return out;
-  }, [frameHistory, currentLap]);
+  const seen = new Set<number>();
+  const out: DataPoint[] = [];
+  for (const f of frameHistory) {
+    if (f.lap?.current_lap_num !== currentLap) continue;
+    if (f.lap.lap_distance == null || f.telemetry == null) continue;
+    const bucket = Math.round(f.lap.lap_distance / 5) * 5;
+    if (seen.has(bucket)) continue;
+    seen.add(bucket);
+    out.push({
+      dist:     bucket,
+      speed:    f.telemetry.speed,
+      throttle: +(f.telemetry.throttle * 100).toFixed(1),
+      brake:    +(f.telemetry.brake    * 100).toFixed(1),
+      gear:     f.telemetry.gear,
+      steer:    +f.telemetry.steer.toFixed(3),
+    });
+  }
+  return out;
+}
+
+// Read store state directly on an interval — no subscription, no per-frame re-renders.
+// The trace updates every 1 s which is plenty for a lap-distance chart.
+function useTimelineData(intervalMs = 1000): DataPoint[] {
+  const [data, setData] = useState<DataPoint[]>([]);
+
+  useEffect(() => {
+    setData(buildDataPoints());
+    const id = setInterval(() => setData(buildDataPoints()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+
+  return data;
 }
 
 // Shared axis config

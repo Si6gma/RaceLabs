@@ -1,5 +1,4 @@
 import { memo } from 'react';
-import { getWearColor } from '@/utils/colors';
 
 interface TyreDisplayProps {
   temps?: number[];
@@ -15,62 +14,134 @@ function getCompoundName(compound: number): string {
   return compounds[compound] || `C${compound}`;
 }
 
-function getTyreTempStyle(temp: number): { bg: string; text: string; border: string; glow?: boolean } {
+/**
+ * Conditional styling utility for the tyre progress bar.
+ *
+ * Returns a color theme object with `fill`, `track`, and `text` colours.
+ *
+ * Rules:
+ * - If `value` is 0% OR `temp` is 0°C (no telemetry), the bar is a muted,
+ *   dark gray (unknown / inactive state).
+ * - Otherwise the bar uses a vibrant colour that corresponds to the tyre's
+ *   temperature status:
+ *     • < 85°C  → Cold (blue)
+ *     • 85–105°C → Optimal window (green)
+ *     • > 105°C  → Overheating (red)
+ */
+function getBarTheme(
+  value: number,
+  temp: number
+): {
+  fill: string;
+  track: string;
+  text: string;
+  glow?: string;
+} {
+  // ── Unknown / inactive state ──
+  if (value === 0 || temp === 0) {
+    return {
+      fill: '#475569',   // slate-600  – muted fill
+      track: '#1e293b',  // slate-800  – dark track
+      text: '#64748b',   // slate-500  – muted label/value
+    };
+  }
+
+  // ── Active: temperature-based vibrant theme ──
   if (temp < 85) {
-    return { bg: 'bg-blue-900/20', text: 'text-blue-300', border: 'border-blue-800/40' };
+    // Cold
+    return {
+      fill: '#3b82f6',   // blue-500
+      track: '#172554',  // blue-950
+      text: '#60a5fa',   // blue-400
+    };
   }
+
   if (temp <= 105) {
-    return { bg: 'bg-green-900/20', text: 'text-green-400', border: 'border-green-800/40' };
+    // Optimal window
+    return {
+      fill: '#22c55e',   // green-500
+      track: '#052e16',  // green-950
+      text: '#4ade80',   // green-400
+    };
   }
-  return { bg: 'bg-red-900/20', text: 'text-red-400', border: 'border-red-800/40', glow: true };
+
+  // Overheating
+  return {
+    fill: '#ef4444',   // red-500
+    track: '#450a0a',  // red-950
+    text: '#f87171',   // red-400
+    glow: '0 0 8px rgba(239,68,68,0.4)',
+  };
 }
 
-function TyreDisplay({ temps = [0, 0, 0, 0], wear = [0, 0, 0, 0], pressures = [0, 0, 0, 0], compound = 0 }: TyreDisplayProps) {
+function TyreDisplay({
+  temps = [0, 0, 0, 0],
+  wear = [0, 0, 0, 0],
+  pressures = [0, 0, 0, 0],
+  compound = 0,
+}: TyreDisplayProps) {
   const labels = ['FL', 'FR', 'RL', 'RR'];
 
   return (
     <div className="flex flex-col gap-2">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <span className="telemetry-label">TYRES</span>
         <span className="text-[10px] text-motorsport-muted font-medium">
           {compound ? getCompoundName(compound) : 'Unknown'}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-1.5">
+
+      {/* 2×2 Grid */}
+      <div className="grid grid-cols-2 gap-2">
         {labels.map((label, i) => {
           const temp = temps[i] || 0;
-          const style = getTyreTempStyle(temp);
+          const value = wear[i] || 0;
+          const theme = getBarTheme(value, temp);
+
+          const isUnknown = value === 0 || temp === 0;
+          const displayValue = isUnknown ? 'Unknown' : `${value.toFixed(0)}%`;
+          const barWidth = isUnknown ? '0%' : `${Math.min(100, value)}%`;
+
           return (
             <div
               key={label}
-              className={`p-1.5 flex flex-col gap-1 rounded border ${style.bg} ${style.border} ${style.glow ? 'animate-pulse' : ''}`}
+              className="bg-motorsport-black border border-motorsport-border rounded p-2.5 flex flex-col gap-2"
             >
+              {/* Label + primary percentage value */}
               <div className="flex justify-between items-center">
-                <span className="text-[10px] font-bold text-motorsport-muted">{label}</span>
-                {temp > 0 && (
-                  <span className={`font-telemetry text-xs font-bold ${style.text}`}>
-                    {temp.toFixed(0)}°
-                  </span>
-                )}
+                <span className="text-[10px] font-bold tracking-wider text-motorsport-muted">
+                  {label}
+                </span>
+                <span
+                  className="font-telemetry text-sm font-bold tabular-nums"
+                  style={{ color: theme.text }}
+                >
+                  {displayValue}
+                </span>
               </div>
 
-              {/* Wear bar */}
-              <div className="gauge-bar h-1">
+              {/* Horizontal progress bar */}
+              <div
+                className="h-2 rounded-full overflow-hidden"
+                style={{ backgroundColor: theme.track }}
+              >
                 <div
-                  className="gauge-fill rounded-sm"
+                  className="h-full rounded-full transition-all duration-300 ease-out"
                   style={{
-                    width: `${Math.min(100, wear[i] || 0)}%`,
-                    backgroundColor: getWearColor(wear[i] || 0),
+                    width: barWidth,
+                    backgroundColor: theme.fill,
+                    boxShadow: theme.glow,
                   }}
                 />
               </div>
 
-              <div className="flex justify-between">
-                <span className="text-[9px] text-motorsport-dim">{wear[i]?.toFixed(0)}%</span>
-                {pressures[i] > 0 && (
-                  <span className="text-[9px] text-motorsport-muted">{pressures[i].toFixed(1)} PSI</span>
-                )}
-              </div>
+              {/* Pressure readout (optional) */}
+              {pressures[i] > 0 && (
+                <span className="font-telemetry text-[10px] text-motorsport-dim self-end tabular-nums">
+                  {pressures[i].toFixed(1)} PSI
+                </span>
+              )}
             </div>
           );
         })}

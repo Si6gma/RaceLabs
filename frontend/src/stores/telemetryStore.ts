@@ -82,6 +82,8 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
       status: frame.status ?? state.currentFrame?.status,
       damage: frame.damage ?? state.currentFrame?.damage,
       session: frame.session ?? state.currentFrame?.session,
+      all_lap_distances: frame.all_lap_distances ?? state.currentFrame?.all_lap_distances,
+      car_team_ids: frame.car_team_ids ?? state.currentFrame?.car_team_ids,
     };
     const newHistory = [...state.frameHistory, merged];
     if (newHistory.length > state.maxHistory) {

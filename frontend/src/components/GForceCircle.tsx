@@ -49,11 +49,11 @@ function GForceCircle({ latG, longG, size = 140 }: GForceCircleProps) {
       ctx.clearRect(0, 0, w, h);
 
       // Background circle
-      ctx.fillStyle = '#0d1117';
+      ctx.fillStyle = '#060A0F';
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#21262d';
+      ctx.strokeStyle = '#1A2840';
       ctx.lineWidth = 1.5;
       ctx.stroke();
 
@@ -61,7 +61,7 @@ function GForceCircle({ latG, longG, size = 140 }: GForceCircleProps) {
       const rings = [1, 2, 3, 4];
       rings.forEach((g) => {
         const r = (g / 4) * radius;
-        ctx.strokeStyle = g === 4 ? '#334155' : '#21262d';
+        ctx.strokeStyle = g === 4 ? '#243856' : '#1A2840';
         ctx.lineWidth = g === 4 ? 1.5 : 1;
         ctx.setLineDash(g === 4 ? [] : [3, 3]);
         ctx.beginPath();
@@ -80,7 +80,7 @@ function GForceCircle({ latG, longG, size = 140 }: GForceCircleProps) {
       });
 
       // Crosshairs
-      ctx.strokeStyle = '#21262d';
+      ctx.strokeStyle = '#1A2840';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(cx - radius, cy);
@@ -98,7 +98,7 @@ function GForceCircle({ latG, longG, size = 140 }: GForceCircleProps) {
       ctx.fillText('LONG', cx - radius - 4, cy + 3);
 
       // Center dot
-      ctx.fillStyle = '#334155';
+      ctx.fillStyle = '#243856';
       ctx.beginPath();
       ctx.arc(cx, cy, 2, 0, Math.PI * 2);
       ctx.fill();

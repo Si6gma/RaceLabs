@@ -203,12 +203,12 @@ function TrackMap({
         for (let i = 1; i < geo.edgeRight.length; i++) ctx.lineTo(geo.edgeRight[i][0], geo.edgeRight[i][1]);
         for (let i = geo.edgeLeft.length - 1; i >= 0; i--) ctx.lineTo(geo.edgeLeft[i][0], geo.edgeLeft[i][1]);
         ctx.closePath();
-        ctx.fillStyle = 'rgba(55,55,70,0.7)';
+        ctx.fillStyle = 'rgba(14,22,32,0.85)';
         ctx.fill();
 
         // Edge strokes
-        ctx.strokeStyle = '#555568';
-        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = '#243856';
+        ctx.lineWidth = 1.5;
         ctx.lineCap = 'round';
         strokePoly(ctx, geo.edgeRight); ctx.stroke();
         strokePoly(ctx, geo.edgeLeft);  ctx.stroke();
@@ -262,13 +262,13 @@ function TrackMap({
         const previous = tracePrevRef.current;
 
         if (current.length + previous.length < 2) {
-          ctx.strokeStyle = '#2a2a2a';
-          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#1A2840';
+          ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.arc(W / 2, H / 2, 30, 0, Math.PI * 2);
+          ctx.arc(W / 2, H / 2, 24, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.fillStyle = '#555';
-          ctx.font = '10px monospace';
+          ctx.fillStyle = '#4A6078';
+          ctx.font = '10px "Barlow Condensed", monospace';
           ctx.textAlign = 'center';
           ctx.fillText('WAITING FOR GPS', W / 2, H / 2 + 4);
           return;
@@ -285,11 +285,11 @@ function TrackMap({
 
         if (previous.length >= 2) {
           strokePoly(ctx, previous.map(ts));
-          ctx.strokeStyle = '#3a3a4a'; ctx.lineWidth = 2; ctx.stroke();
+          ctx.strokeStyle = '#1A2840'; ctx.lineWidth = 2; ctx.stroke();
         }
         if (current.length >= 2) {
           strokePoly(ctx, current.map(ts));
-          ctx.strokeStyle = '#1e6fa8'; ctx.lineWidth = 2.5; ctx.stroke();
+          ctx.strokeStyle = '#1166FF'; ctx.lineWidth = 2.5; ctx.stroke();
           const recent = current.slice(-80).map(ts);
           for (let i = 1; i < recent.length; i++) {
             ctx.beginPath();
@@ -360,9 +360,8 @@ function TrackMap({
   }, [trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType]);
 
   return (
-    <div className="flex flex-col gap-2 h-full">
-      <span className="telemetry-label">TRACK MAP</span>
-      <canvas ref={canvasRef} className="flex-1 w-full min-h-[120px] bg-motorsport-charcoal rounded-sm" />
+    <div className="flex flex-col h-full">
+      <canvas ref={canvasRef} className="flex-1 w-full min-h-[120px] bg-motorsport-black" />
     </div>
   );
 }

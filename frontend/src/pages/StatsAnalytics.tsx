@@ -1,76 +1,105 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
-import { BarChart3, TrendingUp, AlertTriangle, Gauge } from 'lucide-react';
+import { formatTime } from '@/utils/formatters';
 
 interface Stats {
-  speed: { avg: number; max: number; min: number };
-  rpm: { avg: number; max: number };
+  speed:    { avg: number; max: number; min: number };
+  rpm:      { avg: number; max: number };
   throttle: { avg: number };
-  brake: { avg: number };
-  gear: { avg: number; max: number };
-  gForce: { latMax: number; lonMax: number };
+  brake:    { avg: number };
+  gear:     { avg: number; max: number };
+  gForce:   { latMax: number; lonMax: number };
   totalDistance: number;
   frameCount: number;
 }
 
 interface TyreStats {
-  temps: number[];
-  wear: number[];
+  temps:     number[];
+  wear:      number[];
   pressures: number[];
-  compound: number;
-  age: number;
+  compound:  number;
+  age:       number;
+}
+
+const COMPOUND_NAMES: Record<number, string> = {
+  16: 'SOFT', 17: 'MED', 18: 'HARD', 19: 'INTER', 20: 'WET',
+};
+
+function StatCard({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="telemetry-panel flex flex-col">
+      <div className="panel-header">
+        <span className="eng-label font-bold">{label}</span>
+      </div>
+      <div className="flex-1 p-3 flex flex-col gap-2">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function StatRow({ label, value, unit, color }: { label: string; value: string; unit?: string; color?: string }) {
+  return (
+    <div className="flex items-baseline justify-between">
+      <span className="eng-label">{label}</span>
+      <span className="font-telemetry text-[13px] tabular-nums" style={{ color: color || '#B8C8D6' }}>
+        {value}{unit && <span className="text-motorsport-dim text-[10px] ml-0.5">{unit}</span>}
+      </span>
+    </div>
+  );
+}
+
+function MiniBar({ value, max, color }: { value: number; max: number; color: string }) {
+  return (
+    <div className="h-[2px] bg-motorsport-dark mt-0.5">
+      <div className="h-full transition-[width] duration-300" style={{ width: `${Math.min(100, (value / max) * 100)}%`, backgroundColor: color }} />
+    </div>
+  );
 }
 
 export default function StatsAnalytics() {
   const session = useTelemetryStore(s => s.session);
-  const [stats, setStats] = useState<Stats | null>(null);
+  const [stats, setStats]         = useState<Stats | null>(null);
   const [tyreStats, setTyreStats] = useState<TyreStats | null>(null);
   const lastLenRef = useRef(0);
 
-  // Sample stats at 1 Hz so high-frequency store updates don't burn CPU here.
   useEffect(() => {
     const compute = () => {
-      const frameHistory = useTelemetryStore.getState().frameHistory;
-      if (frameHistory.length === 0) {
-        setStats(null);
-        setTyreStats(null);
-        lastLenRef.current = 0;
-        return;
-      }
-      // Skip recompute if frame count hasn't changed (no new data)
+      const { frameHistory } = useTelemetryStore.getState();
+      if (!frameHistory.length) { setStats(null); setTyreStats(null); lastLenRef.current = 0; return; }
       if (frameHistory.length === lastLenRef.current && stats !== null) return;
       lastLenRef.current = frameHistory.length;
 
-      const speeds = frameHistory.map(f => f.telemetry?.speed || 0).filter(s => s > 0);
-      const rpms = frameHistory.map(f => f.telemetry?.engine_rpm || 0).filter(r => r > 0);
-      const throttles = frameHistory.map(f => f.telemetry?.throttle || 0);
-      const brakes = frameHistory.map(f => f.telemetry?.brake || 0);
-      const gears = frameHistory.map(f => f.telemetry?.gear || 0).filter(g => g > 0);
-      const latGs = frameHistory.map(f => f.motion?.g_force_lat || 0);
-      const lonGs = frameHistory.map(f => f.motion?.g_force_lon || 0);
-
       const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
-      const max = (arr: number[]) => arr.length > 0 ? Math.max(...arr) : 0;
-      const min = (arr: number[]) => arr.length > 0 ? Math.min(...arr) : 0;
+      const max = (arr: number[]) => arr.length ? Math.max(...arr) : 0;
+      const min = (arr: number[]) => arr.length ? Math.min(...arr) : 0;
+
+      const speeds    = frameHistory.map(f => f.telemetry?.speed ?? 0).filter(v => v > 0);
+      const rpms      = frameHistory.map(f => f.telemetry?.engine_rpm ?? 0).filter(v => v > 0);
+      const throttles = frameHistory.map(f => f.telemetry?.throttle ?? 0);
+      const brakes    = frameHistory.map(f => f.telemetry?.brake ?? 0);
+      const gears     = frameHistory.map(f => f.telemetry?.gear ?? 0).filter(v => v > 0);
+      const latGs     = frameHistory.map(f => f.motion?.g_force_lat ?? 0);
+      const lonGs     = frameHistory.map(f => f.motion?.g_force_lon ?? 0);
 
       setStats({
-        speed: { avg: avg(speeds), max: max(speeds), min: min(speeds) },
-        rpm: { avg: avg(rpms), max: max(rpms) },
+        speed:    { avg: avg(speeds), max: max(speeds), min: min(speeds) },
+        rpm:      { avg: avg(rpms), max: max(rpms) },
         throttle: { avg: avg(throttles) * 100 },
-        brake: { avg: avg(brakes) * 100 },
-        gear: { avg: avg(gears), max: max(gears) },
-        gForce: { latMax: max(latGs.map(Math.abs)), lonMax: max(lonGs.map(Math.abs)) },
-        totalDistance: frameHistory[frameHistory.length - 1].lap?.total_distance || 0,
+        brake:    { avg: avg(brakes) * 100 },
+        gear:     { avg: avg(gears), max: max(gears) },
+        gForce:   { latMax: max(latGs.map(Math.abs)), lonMax: max(lonGs.map(Math.abs)) },
+        totalDistance: frameHistory[frameHistory.length - 1].lap?.total_distance ?? 0,
         frameCount: frameHistory.length,
       });
 
       const last = frameHistory[frameHistory.length - 1];
       setTyreStats({
-        temps: last.telemetry?.tyres_surface_temp || [0, 0, 0, 0],
-        wear: last.status?.tyres_wear || [0, 0, 0, 0],
-        pressures: last.telemetry?.tyres_pressure || [0, 0, 0, 0],
-        compound: last.status?.tyre_compound || 0,
-        age: last.status?.tyres_age_laps || 0,
+        temps:     last.telemetry?.tyres_surface_temp ?? [0,0,0,0],
+        wear:      last.status?.tyres_wear            ?? [0,0,0,0],
+        pressures: last.telemetry?.tyres_pressure     ?? [0,0,0,0],
+        compound:  last.status?.tyre_compound         ?? 0,
+        age:       last.status?.tyres_age_laps        ?? 0,
       });
     };
 
@@ -78,194 +107,131 @@ export default function StatsAnalytics() {
     const id = setInterval(compute, 1000);
     return () => clearInterval(id);
   }, []);
-  
+
   return (
-    <div className="h-full flex flex-col p-3 gap-3 overflow-auto">
-      {/* Header */}
-      <div className="flex items-center gap-2 telemetry-panel p-2 shrink-0">
-        <BarChart3 className="w-4 h-4 text-motorsport-orange" />
-        <span className="text-sm font-semibold">ANALYTICS</span>
+    <div className="h-full flex flex-col gap-px p-px bg-motorsport-dim/20 overflow-auto">
+      {/* ── Header ── */}
+      <div className="telemetry-panel shrink-0">
+        <div className="panel-header">
+          <span className="eng-label font-bold">Session Analytics</span>
+          {session && (
+            <span className="text-[11px] text-motorsport-muted ml-auto uppercase tracking-wider">
+              {session.track} · {session.session_type}
+            </span>
+          )}
+        </div>
       </div>
-      
+
       {!stats ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <Gauge className="w-12 h-12 text-motorsport-dim mx-auto mb-3" />
-            <p className="text-sm text-motorsport-muted">Collecting telemetry data...</p>
+            <div className="text-[40px] font-telemetry text-motorsport-dim mb-2">---</div>
+            <p className="text-[13px] text-motorsport-muted uppercase tracking-widest">Collecting telemetry…</p>
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-4 gap-3">
-          {/* Speed Stats */}
-          <div className="telemetry-panel p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <TrendingUp className="w-4 h-4 text-motorsport-cyan" />
-              <span className="text-xs font-semibold uppercase tracking-wider text-motorsport-muted">Speed</span>
+        <div className="grid grid-cols-4 gap-px">
+
+          {/* Speed */}
+          <StatCard label="Speed">
+            <div>
+              <span className="eng-label block">MAX</span>
+              <span className="font-telemetry font-bold tabular-nums" style={{ fontSize: '1.8rem', color: '#00D4FF' }}>
+                {stats.speed.max.toFixed(0)}
+              </span>
+              <span className="eng-label ml-1">KM/H</span>
             </div>
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Max</span>
-                <span className="font-telemetry text-lg text-motorsport-cyan">{stats.speed.max.toFixed(0)} km/h</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Avg</span>
-                <span className="font-telemetry text-sm">{stats.speed.avg.toFixed(0)} km/h</span>
-              </div>
-              <div className="gauge-bar">
-                <div 
-                  className="gauge-fill rounded-sm bg-motorsport-cyan"
-                  style={{ width: `${(stats.speed.avg / 350) * 100}%` }}
-                />
-              </div>
+            <StatRow label="AVG" value={stats.speed.avg.toFixed(0)} unit="km/h" />
+            <MiniBar value={stats.speed.avg} max={350} color="#00D4FF" />
+          </StatCard>
+
+          {/* Engine */}
+          <StatCard label="Engine">
+            <div>
+              <span className="eng-label block">PEAK RPM</span>
+              <span className="font-telemetry font-bold tabular-nums" style={{ fontSize: '1.6rem', color: '#8855FF' }}>
+                {stats.rpm.max.toLocaleString()}
+              </span>
             </div>
-          </div>
-          
-          {/* RPM Stats */}
-          <div className="telemetry-panel p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Gauge className="w-4 h-4 text-motorsport-purple" />
-              <span className="text-xs font-semibold uppercase tracking-wider text-motorsport-muted">Engine</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Max RPM</span>
-                <span className="font-telemetry text-lg text-motorsport-purple">{stats.rpm.max.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Avg RPM</span>
-                <span className="font-telemetry text-sm">{stats.rpm.avg.toFixed(0)}</span>
-              </div>
-              <div className="gauge-bar">
-                <div 
-                  className="gauge-fill rounded-sm bg-motorsport-purple"
-                  style={{ width: `${(stats.rpm.avg / 15000) * 100}%` }}
-                />
-              </div>
-            </div>
-          </div>
-          
+            <StatRow label="AVG RPM" value={stats.rpm.avg.toFixed(0)} color="#8855FF" />
+            <MiniBar value={stats.rpm.avg} max={15000} color="#8855FF" />
+          </StatCard>
+
           {/* Inputs */}
-          <div className="telemetry-panel p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <AlertTriangle className="w-4 h-4 text-motorsport-orange" />
-              <span className="text-xs font-semibold uppercase tracking-wider text-motorsport-muted">Inputs</span>
-            </div>
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Throttle %</span>
-                <span className="font-telemetry text-sm text-motorsport-green">{stats.throttle.avg.toFixed(1)}%</span>
-              </div>
-              <div className="gauge-bar">
-                <div 
-                  className="gauge-fill rounded-sm bg-motorsport-green"
-                  style={{ width: `${stats.throttle.avg}%` }}
-                />
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Brake %</span>
-                <span className="font-telemetry text-sm text-motorsport-red">{stats.brake.avg.toFixed(1)}%</span>
-              </div>
-              <div className="gauge-bar">
-                <div 
-                  className="gauge-fill rounded-sm bg-motorsport-red"
-                  style={{ width: `${stats.brake.avg}%` }}
-                />
-              </div>
-            </div>
-          </div>
-          
+          <StatCard label="Inputs">
+            <StatRow label="AVG THROTTLE" value={stats.throttle.avg.toFixed(1)} unit="%" color="#00E85A" />
+            <MiniBar value={stats.throttle.avg} max={100} color="#00E85A" />
+            <StatRow label="AVG BRAKE" value={stats.brake.avg.toFixed(1)} unit="%" color="#FF2044" />
+            <MiniBar value={stats.brake.avg} max={100} color="#FF2044" />
+            <StatRow label="AVG GEAR" value={stats.gear.avg.toFixed(1)} />
+          </StatCard>
+
           {/* G-Force */}
-          <div className="telemetry-panel p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <TrendingUp className="w-4 h-4 text-motorsport-yellow" />
-              <span className="text-xs font-semibold uppercase tracking-wider text-motorsport-muted">G-Force</span>
+          <StatCard label="G-Force">
+            <div>
+              <span className="eng-label block">PEAK LATERAL</span>
+              <span className="font-telemetry font-bold tabular-nums" style={{ fontSize: '1.8rem', color: '#FFD000' }}>
+                {stats.gForce.latMax.toFixed(2)}
+              </span>
+              <span className="eng-label ml-1">G</span>
             </div>
-            <div className="space-y-2">
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Lat Max</span>
-                <span className="font-telemetry text-lg text-motorsport-yellow">{stats.gForce.latMax.toFixed(2)}G</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Lon Max</span>
-                <span className="font-telemetry text-sm">{stats.gForce.lonMax.toFixed(2)}G</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-xs text-motorsport-muted">Avg Gear</span>
-                <span className="font-telemetry text-sm">{stats.gear.avg.toFixed(1)}</span>
-              </div>
-            </div>
-          </div>
-          
-          {/* Tyre Degradation */}
+            <StatRow label="PEAK LONGITUDINAL" value={stats.gForce.lonMax.toFixed(2)} unit="G" color="#FFD000" />
+          </StatCard>
+
+          {/* Tyres */}
           {tyreStats && (
-            <div className="col-span-2 telemetry-panel p-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-motorsport-muted mb-3">Tyre Condition</h3>
-              <div className="grid grid-cols-4 gap-3">
-                {['FL', 'FR', 'RL', 'RR'].map((pos, i) => (
-                  <div key={pos} className="bg-motorsport-charcoal rounded-sm p-3">
-                    <div className="text-xs font-bold text-motorsport-muted mb-2">{pos}</div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between">
-                        <span className="text-[10px] text-motorsport-dim">Temp</span>
-                        <span className="font-telemetry text-xs">{tyreStats.temps[i]}°C</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[10px] text-motorsport-dim">Wear</span>
-                        <span className="font-telemetry text-xs" style={{ 
-                          color: tyreStats.wear[i] > 50 ? '#ff1744' : tyreStats.wear[i] > 30 ? '#ff9100' : '#00e676'
-                        }}>
-                          {tyreStats.wear[i]}%
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-[10px] text-motorsport-dim">PSI</span>
-                        <span className="font-telemetry text-xs">{tyreStats.pressures[i].toFixed(1)}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+            <div className="col-span-2 telemetry-panel">
+              <div className="panel-header justify-between">
+                <span className="eng-label font-bold">Tyre Condition</span>
+                <div className="flex items-center gap-3 text-[12px] text-motorsport-muted uppercase tracking-wider">
+                  <span>Compound: <span className="text-motorsport-text font-semibold ml-1">{COMPOUND_NAMES[tyreStats.compound] ?? tyreStats.compound}</span></span>
+                  <span>Age: <span className="font-telemetry text-motorsport-text ml-1">{tyreStats.age}L</span></span>
+                </div>
               </div>
-              <div className="mt-3 flex items-center gap-4 text-xs text-motorsport-muted">
-                <span>Compound: <span className="text-motorsport-text">{tyreStats.compound}</span></span>
-                <span>Age: <span className="text-motorsport-text">{tyreStats.age} laps</span></span>
+              <div className="p-3 grid grid-cols-4 gap-2">
+                {['FL', 'FR', 'RL', 'RR'].map((pos, i) => {
+                  const wearColor = tyreStats.wear[i] > 50 ? '#FF2044' : tyreStats.wear[i] > 30 ? '#FFD000' : '#00E85A';
+                  return (
+                    <div key={pos} className="bg-motorsport-dark border border-motorsport-border p-2.5 flex flex-col gap-1.5">
+                      <span className="text-[12px] font-bold text-motorsport-muted uppercase tracking-widest">{pos}</span>
+                      <StatRow label="TEMP" value={`${tyreStats.temps[i]}°`} />
+                      <div className="flex items-baseline justify-between">
+                        <span className="eng-label">WEAR</span>
+                        <span className="font-telemetry text-[13px] tabular-nums" style={{ color: wearColor }}>{tyreStats.wear[i].toFixed(0)}%</span>
+                      </div>
+                      <div className="h-[2px] bg-motorsport-border">
+                        <div className="h-full" style={{ width: `${100 - tyreStats.wear[i]}%`, backgroundColor: wearColor }} />
+                      </div>
+                      <StatRow label="PSI" value={tyreStats.pressures[i].toFixed(1)} color="#4A6078" />
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
-          
-          {/* Session Stats */}
-          <div className="col-span-2 telemetry-panel p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-motorsport-muted mb-3">Session Summary</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-motorsport-charcoal rounded-sm p-3">
-                <div className="text-[10px] text-motorsport-dim uppercase">Total Frames</div>
-                <div className="font-telemetry text-xl text-motorsport-text">{stats.frameCount.toLocaleString()}</div>
-              </div>
-              <div className="bg-motorsport-charcoal rounded-sm p-3">
-                <div className="text-[10px] text-motorsport-dim uppercase">Distance</div>
-                <div className="font-telemetry text-xl text-motorsport-text">{(stats.totalDistance / 1000).toFixed(2)} km</div>
-              </div>
-              <div className="bg-motorsport-charcoal rounded-sm p-3">
-                <div className="text-[10px] text-motorsport-dim uppercase">Best Lap</div>
-                <div className="font-telemetry text-xl text-motorsport-cyan">
-                  {session?.best_lap_time ? formatTime(session.best_lap_time) : '--:--'}
+
+          {/* Session summary */}
+          <div className="col-span-2 telemetry-panel">
+            <div className="panel-header">
+              <span className="eng-label font-bold">Session Summary</span>
+            </div>
+            <div className="p-3 grid grid-cols-2 gap-2">
+              {[
+                { label: 'TOTAL FRAMES', value: stats.frameCount.toLocaleString(), color: '#B8C8D6' },
+                { label: 'DISTANCE', value: `${(stats.totalDistance / 1000).toFixed(2)} km`, color: '#B8C8D6' },
+                { label: 'BEST LAP', value: session?.best_lap_time ? formatTime(session.best_lap_time) : '--:--.---', color: '#00D4FF' },
+                { label: 'CURRENT LAP', value: `${session?.current_lap || '--'}`, color: '#B8C8D6' },
+              ].map(item => (
+                <div key={item.label} className="bg-motorsport-dark border border-motorsport-border p-2.5">
+                  <span className="eng-label block mb-1">{item.label}</span>
+                  <span className="font-telemetry text-xl font-semibold tabular-nums" style={{ color: item.color }}>{item.value}</span>
                 </div>
-              </div>
-              <div className="bg-motorsport-charcoal rounded-sm p-3">
-                <div className="text-[10px] text-motorsport-dim uppercase">Current Lap</div>
-                <div className="font-telemetry text-xl text-motorsport-text">{session?.current_lap || '--'}</div>
-              </div>
+              ))}
             </div>
           </div>
+
         </div>
       )}
     </div>
   );
-}
-
-function formatTime(ms: number): string {
-  if (!ms || ms <= 0) return '--:--.---';
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-  const millis = ms % 1000;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
 }

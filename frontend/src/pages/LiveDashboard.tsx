@@ -16,7 +16,6 @@ function LiveDashboard() {
   const l = currentFrame?.lap;
   const s = currentFrame?.status;
 
-  // Poll session metadata every 5 s
   useEffect(() => {
     const poll = async () => {
       try {
@@ -33,27 +32,14 @@ function LiveDashboard() {
   }, [setSession]);
 
   return (
-    /*
-     * Top-level layout:
-     *   ┌──────────────────────────────────────────────────────────┐
-     *   │ main-row  (flex-1, ~65% height)                         │
-     *   │  ├── left-col  220 px  (DriverInputs + TyreAnalytics)   │
-     *   │  ├── center    flex-1  (Track Map)                       │
-     *   │  └── right-col 200 px  (TimingTower + ERSSuite)         │
-     *   ├──────────────────────────────────────────────────────────┤
-     *   │ timeline (300 px fixed, Recharts multi-channel trace)    │
-     *   └──────────────────────────────────────────────────────────┘
-     */
-    <div className="h-full flex flex-col gap-1.5 p-1.5 overflow-hidden bg-motorsport-black">
+    <div className="h-full flex flex-col gap-px p-px overflow-hidden bg-motorsport-dim/20">
 
       {/* ── Main row ── */}
-      <div className="flex gap-1.5 flex-1 min-h-0">
+      <div className="flex gap-px flex-1 min-h-0">
 
-        {/* Left column: Driver Inputs (top 60%) + Tyre Analytics (bottom 40%) */}
-        <div className="grid gap-1.5 w-[220px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
-          <div className="min-h-0">
-            <DriverInputsPanel />
-          </div>
+        {/* Left: Driver Inputs (60%) + Tyres (40%) */}
+        <div className="grid gap-px w-[216px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
+          <div className="min-h-0"><DriverInputsPanel /></div>
           <div className="min-h-0">
             <TyreAnalytics
               surfaceTemps={t?.tyres_surface_temp}
@@ -66,34 +52,43 @@ function LiveDashboard() {
           </div>
         </div>
 
-        {/* Center: Track Map — fills all remaining width */}
-        <div className="flex-1 min-w-0 telemetry-panel p-1.5">
-          <MiniTrackMapMemo
-            trackId={currentFrame?.session?.track_id}
-            trackLength={currentFrame?.session?.track_length}
-            playerCarIndex={currentFrame?.player_car_index}
-            allLapDistances={currentFrame?.all_lap_distances}
-            carTeamIds={currentFrame?.car_team_ids}
-            posX={m?.world_pos_x}
-            posZ={m?.world_pos_z}
-            lapNumber={l?.current_lap_num}
-            sessionType={currentFrame?.session?.session_type}
-          />
+        {/* Center: Track Map */}
+        <div className="flex-1 min-w-0 telemetry-panel overflow-hidden">
+          <div className="panel-header">
+            <span className="eng-label font-bold">Track Map</span>
+            {currentFrame?.session?.track_id !== undefined && (
+              <span className="font-telemetry text-[10px] text-motorsport-dim ml-auto">
+                ID·{currentFrame.session.track_id}
+                {currentFrame.session.track_length
+                  ? ` · ${(currentFrame.session.track_length / 1000).toFixed(3)}km`
+                  : ''}
+              </span>
+            )}
+          </div>
+          <div className="h-[calc(100%-33px)]">
+            <MiniTrackMapMemo
+              trackId={currentFrame?.session?.track_id}
+              trackLength={currentFrame?.session?.track_length}
+              playerCarIndex={currentFrame?.player_car_index}
+              allLapDistances={currentFrame?.all_lap_distances}
+              carTeamIds={currentFrame?.car_team_ids}
+              posX={m?.world_pos_x}
+              posZ={m?.world_pos_z}
+              lapNumber={l?.current_lap_num}
+              sessionType={currentFrame?.session?.session_type}
+            />
+          </div>
         </div>
 
-        {/* Right column: Timing Tower (top 60%) + ERS Suite (bottom 40%) */}
-        <div className="grid gap-1.5 w-[200px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
-          <div className="min-h-0">
-            <TimingTower />
-          </div>
-          <div className="min-h-0">
-            <ERSSuite />
-          </div>
+        {/* Right: Timing (60%) + ERS (40%) */}
+        <div className="grid gap-px w-[196px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
+          <div className="min-h-0"><TimingTower /></div>
+          <div className="min-h-0"><ERSSuite /></div>
         </div>
       </div>
 
-      {/* ── Telemetry Trace Timeline ── */}
-      <div className="h-[320px] shrink-0">
+      {/* ── Telemetry Trace ── */}
+      <div className="h-[300px] shrink-0">
         <TelemetryTimeline />
       </div>
     </div>

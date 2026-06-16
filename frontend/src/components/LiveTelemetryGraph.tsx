@@ -293,16 +293,16 @@ function LiveTelemetryGraph() {
         const stripBottom = stripTop + stripH;
 
         // Background
-        ctx.fillStyle = '#0d1117';
+        ctx.fillStyle = '#060A0F';
         ctx.fillRect(PAD.left, stripTop, graphWidth, stripH);
 
         // Border
-        ctx.strokeStyle = '#21262d';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#1A2840';
+        ctx.lineWidth = 0.5;
         ctx.strokeRect(PAD.left, stripTop, graphWidth, stripH);
 
         // Horizontal gridlines
-        ctx.strokeStyle = '#1e293b';
+        ctx.strokeStyle = '#1A2840';
         ctx.lineWidth = 0.5;
         for (let g = 0; g <= 4; g++) {
           const y = stripBottom - (g / 4) * stripH;
@@ -437,17 +437,19 @@ function LiveTelemetryGraph() {
   return (
     <div className="telemetry-panel flex-1 min-h-0 flex flex-col">
       {/* Header */}
-      <div className="flex items-center gap-2 px-2 py-1.5 border-b border-motorsport-border shrink-0">
-        <span className="telemetry-label mr-1">Telemetry</span>
-        {STRIPS.map(s => (
-          <div key={s.key} className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px]" style={{ backgroundColor: `${s.color}18`, color: s.color }}>
-            <Activity className="w-3 h-3" />
-            {s.label}
+      <div className="panel-header justify-between">
+        <span className="eng-label font-bold">Live Telemetry</span>
+        <div className="flex items-center gap-2">
+          {STRIPS.map(s => (
+            <div key={s.key} className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide border" style={{ backgroundColor: `${s.color}10`, color: s.color, borderColor: `${s.color}30` }}>
+              <Activity className="w-2.5 h-2.5" />
+              {s.label}
+            </div>
+          ))}
+          <div className={`flex items-center gap-1 px-2 py-0.5 border text-[10px] font-semibold uppercase tracking-wide ${cursorLocked ? 'text-motorsport-orange border-motorsport-orange/30 bg-motorsport-orange/10' : 'text-motorsport-muted border-motorsport-border'}`}>
+            {cursorLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+            {cursorLocked ? 'Locked' : 'Live'}
           </div>
-        ))}
-        <div className={`ml-auto flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] ${cursorLocked ? 'text-motorsport-orange' : 'text-motorsport-muted'}`}>
-          {cursorLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-          {cursorLocked ? 'Locked' : 'Live'}
         </div>
       </div>
 

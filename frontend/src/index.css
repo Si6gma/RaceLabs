@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,15 +7,16 @@
 @layer base {
   html {
     @apply bg-motorsport-black text-motorsport-text;
-    font-family: 'Inter', system-ui, sans-serif;
-    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    font-family: 'Barlow Condensed', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.4;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { @apply bg-motorsport-dim rounded-full; }
+  ::-webkit-scrollbar-thumb { @apply bg-motorsport-dim; }
   ::-webkit-scrollbar-thumb:hover { @apply bg-motorsport-muted; }
   ::-webkit-scrollbar-corner { background: transparent; }
 
@@ -21,73 +24,92 @@
 }
 
 @layer components {
-  /* Flat engineering panel — no glow, clean border */
+  /* ── Core panel ── */
   .telemetry-panel {
-    @apply bg-motorsport-panel border border-motorsport-border rounded;
+    @apply bg-motorsport-panel border border-motorsport-border;
   }
 
+  /* Panel section header — left orange accent bar */
   .panel-header {
-    @apply px-2 py-1.5 border-b border-motorsport-border flex items-center gap-2;
+    @apply px-2.5 py-1.5 border-b border-motorsport-border flex items-center gap-2 shrink-0;
+    border-left: 2px solid theme('colors.motorsport.orange');
   }
 
   .panel-section {
-    @apply px-2 py-1.5 border-b border-motorsport-border/60;
+    @apply px-2.5 py-1.5 border-b border-motorsport-border/60;
   }
 
-  /* All live numeric readouts must use monospaced font */
-  .telemetry-value {
-    @apply font-telemetry text-sm tabular-nums;
-  }
-
-  /* Channel/field label — minimal, uppercase, tracked */
+  /* ── Typography ── */
   .eng-label {
-    @apply text-[9px] text-motorsport-muted uppercase tracking-widest font-medium;
+    @apply text-[10px] text-motorsport-muted uppercase tracking-wider font-semibold;
+    letter-spacing: 0.08em;
   }
 
-  /* Flat thin progress bar */
+  .telemetry-value {
+    @apply font-telemetry tabular-nums;
+  }
+
+  /* ── Bars ── */
   .eng-bar-track {
-    @apply h-1 rounded-full overflow-hidden bg-motorsport-dark;
+    @apply overflow-hidden bg-motorsport-dark;
+    height: 3px;
   }
   .eng-bar-fill {
     @apply h-full transition-[width] duration-75 ease-linear;
   }
 
-  /* Compact status chip */
+  /* ── Chips ── */
   .eng-chip {
-    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold rounded-sm
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold
            border font-telemetry tracking-wider uppercase;
   }
 
-  /* Legacy compat */
-  .telemetry-label { @apply eng-label; }
-  .gauge-bar { @apply h-1.5 bg-motorsport-dark rounded-full overflow-hidden; }
-  .gauge-fill { @apply h-full transition-all duration-75 ease-out; }
-
+  /* ── Badges ── */
   .badge-live {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border
-           bg-motorsport-green/10 text-motorsport-green border-motorsport-green/30;
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-semibold border
+           bg-motorsport-green/10 text-motorsport-green border-motorsport-green/30 uppercase tracking-wide;
   }
   .badge-saved {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border
-           bg-motorsport-muted/10 text-motorsport-muted border-motorsport-border;
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-semibold border
+           bg-motorsport-muted/10 text-motorsport-muted border-motorsport-border uppercase tracking-wide;
   }
   .badge-csv {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded border
-           bg-motorsport-blue/10 text-motorsport-blue border-motorsport-blue/30;
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-semibold border
+           bg-motorsport-blue/10 text-motorsport-blue border-motorsport-blue/30 uppercase tracking-wide;
   }
 
+  /* ── Table ── */
   .table-row-interactive {
-    @apply border-b border-motorsport-border/40 hover:bg-motorsport-surface/40 cursor-pointer transition-colors;
+    @apply border-b border-motorsport-border/40 hover:bg-motorsport-surface/50 cursor-pointer transition-colors;
   }
 
+  /* ── Form elements ── */
   .field {
-    @apply bg-motorsport-dark border border-motorsport-border rounded px-3 py-1.5 text-xs
+    @apply bg-motorsport-dark border border-motorsport-border px-3 py-1.5 text-sm
            text-motorsport-text placeholder-motorsport-dim
-           focus:outline-none focus:border-motorsport-orange/60 focus:ring-1 focus:ring-motorsport-orange/20
+           focus:outline-none focus:border-motorsport-cyan/60 focus:ring-1 focus:ring-motorsport-cyan/20
            transition-colors;
   }
 
   .icon-btn {
-    @apply p-1.5 rounded hover:bg-motorsport-surface transition-colors text-motorsport-muted hover:text-motorsport-text;
+    @apply p-1.5 hover:bg-motorsport-surface transition-colors text-motorsport-muted hover:text-motorsport-text;
   }
+
+  .btn-primary {
+    @apply flex items-center gap-1.5 px-3 py-1.5 bg-motorsport-orange text-black
+           text-[12px] font-bold uppercase tracking-widest
+           hover:bg-orange-500 active:scale-95 transition-all;
+    letter-spacing: 0.1em;
+  }
+
+  .btn-ghost {
+    @apply flex items-center gap-1.5 px-3 py-1.5 bg-transparent text-motorsport-muted
+           text-[12px] font-semibold uppercase tracking-wider
+           border border-motorsport-border hover:border-motorsport-muted/50 hover:text-motorsport-text transition-all;
+  }
+
+  /* ── Legacy aliases ── */
+  .telemetry-label { @apply eng-label; }
+  .gauge-bar { @apply eng-bar-track; }
+  .gauge-fill { @apply eng-bar-fill; }
 }

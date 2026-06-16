@@ -84,7 +84,7 @@ function TelemetryGraphCanvas({
       const posSpan = Math.max(1e-9, zEnd - zStart);
 
       // Grid lines
-      ctx.strokeStyle = '#1e293b';
+      ctx.strokeStyle = '#1A2840';
       ctx.lineWidth = 0.5;
       for (let i = 0; i <= 5; i++) {
         const y = PAD.top + (graphHeight / 5) * i;

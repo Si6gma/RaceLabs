@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useLayoutEffect, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatGear } from '@/utils/formatters';
 
@@ -31,30 +31,28 @@ function ShiftLights({ revPercent }: { revPercent: number }) {
   );
 }
 
-// ── Micro-trace ───────────────────────────────────────────────────────────────
+// ── Micro-trace (SVG) ─────────────────────────────────────────────────────────
 const TRACE_FRAMES = 80;
 const TRACE_W = 120;
 const TRACE_H = 28;
 
 function MicroTrace({ frames }: { frames: { throttle: number; brake: number }[] }) {
-  const { tPath, bPath } = useMemo(() => {
-    if (!frames.length) return { tPath: '', bPath: '' };
-    const n = frames.length;
-    const toX = (i: number) => (i / (TRACE_FRAMES - 1)) * TRACE_W;
-    const toY = (v: number) => TRACE_H - v * TRACE_H;
-    let tp = `M${toX(0)},${toY(frames[0].throttle)}`;
-    let bp = `M${toX(0)},${toY(frames[0].brake)}`;
-    for (let i = 1; i < n; i++) {
-      tp += ` L${toX(i)},${toY(frames[i].throttle)}`;
-      bp += ` L${toX(i)},${toY(frames[i].brake)}`;
-    }
-    return { tPath: tp, bPath: bp };
-  }, [frames]);
+  if (frames.length < 2) return <svg width="100%" height={TRACE_H} />;
+  const n = frames.length;
+  const toX = (i: number) => (i / (n - 1)) * TRACE_W;
+  const toY = (v: number) => TRACE_H - v * TRACE_H;
+
+  let tp = `M${toX(0)},${toY(frames[0].throttle)}`;
+  let bp = `M${toX(0)},${toY(frames[0].brake)}`;
+  for (let i = 1; i < n; i++) {
+    tp += ` L${toX(i)},${toY(frames[i].throttle)}`;
+    bp += ` L${toX(i)},${toY(frames[i].brake)}`;
+  }
 
   return (
     <svg width="100%" height={TRACE_H} viewBox={`0 0 ${TRACE_W} ${TRACE_H}`} preserveAspectRatio="none" className="overflow-visible">
-      <path d={tPath} fill="none" stroke="#00E85A" strokeWidth={1.2} />
-      <path d={bPath} fill="none" stroke="#FF2044" strokeWidth={1.2} />
+      <path d={tp} fill="none" stroke="#00E85A" strokeWidth={1.2} />
+      <path d={bp} fill="none" stroke="#FF2044" strokeWidth={1.2} />
     </svg>
   );
 }
@@ -81,12 +79,11 @@ function InputBar({ label, value, color }: { label: string; value: number; color
 // ─────────────────────────────────────────────────────────────────────────────
 
 function DriverInputsPanel() {
-  const t           = useTelemetryStore(s => s.currentFrame?.telemetry);
-  const frameHistory = useTelemetryStore(s => s.frameHistory);
-  const m           = useTelemetryStore(s => s.currentFrame?.motion);
+  const t = useTelemetryStore(s => s.currentFrame?.telemetry);
+  const m = useTelemetryStore(s => s.currentFrame?.motion);
 
-  const speed    = t?.speed ?? 0;
-  const gear     = t?.gear  ?? 0;
+  const speed    = t?.speed    ?? 0;
+  const gear     = t?.gear     ?? 0;
   const rpm      = t?.engine_rpm ?? 0;
   const revPct   = t?.rev_lights_percent ?? Math.min(100, (rpm / 15000) * 100);
   const throttle = t?.throttle ?? 0;
@@ -95,12 +92,16 @@ function DriverInputsPanel() {
   const lonG     = m?.g_force_lon ?? 0;
   const gMag     = Math.sqrt(latG * latG + lonG * lonG);
 
-  const traceFrames = useMemo(() => {
-    return frameHistory.slice(-TRACE_FRAMES).map(f => ({
-      throttle: f.telemetry?.throttle ?? 0,
-      brake:    f.telemetry?.brake    ?? 0,
-    }));
-  }, [frameHistory]);
+  // Accumulate micro-trace in a ref — avoids subscribing to the 1000-frame
+  // frameHistory array and re-running a .slice().map() on every update.
+  const traceRef = useRef<{ throttle: number; brake: number }[]>([]);
+  useLayoutEffect(() => {
+    const entry = { throttle, brake };
+    const cur = traceRef.current;
+    traceRef.current = cur.length >= TRACE_FRAMES
+      ? [...cur.slice(1), entry]
+      : [...cur, entry];
+  }, [throttle, brake]);
 
   const gearColor =
     gear >= 7 ? '#FF2044' :
@@ -174,7 +175,7 @@ function DriverInputsPanel() {
         <div className="flex flex-col gap-1 shrink-0">
           <span className="eng-label">MODULATION</span>
           <div className="bg-motorsport-dark px-1.5 py-1">
-            <MicroTrace frames={traceFrames} />
+            <MicroTrace frames={traceRef.current} />
           </div>
         </div>
 

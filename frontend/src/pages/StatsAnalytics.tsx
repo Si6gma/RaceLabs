@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useTelemetryStore } from '@/stores/telemetryStore';
+import { useTelemetryStore, getFrameHistory } from '@/stores/telemetryStore';
 import { formatTime } from '@/utils/formatters';
 
 interface Stats {
@@ -65,7 +65,7 @@ export default function StatsAnalytics() {
 
   useEffect(() => {
     const compute = () => {
-      const { frameHistory } = useTelemetryStore.getState();
+      const frameHistory = getFrameHistory();
       if (!frameHistory.length) { setStats(null); setTyreStats(null); lastLenRef.current = 0; return; }
       if (frameHistory.length === lastLenRef.current && stats !== null) return;
       lastLenRef.current = frameHistory.length;

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
-import { useTelemetryStore } from '@/stores/telemetryStore';
+import { useTelemetryStore, getFrameHistory } from '@/stores/telemetryStore';
 
 interface DataPoint {
   dist:     number;
@@ -22,7 +22,8 @@ const DIVIDERS = [0.27, 0.49, 0.69];
 const PAD = { top: 8, right: 64, bottom: 24, left: 36 };
 
 function buildDataPoints(): DataPoint[] {
-  const { frameHistory, currentFrame } = useTelemetryStore.getState();
+  const frameHistory = getFrameHistory();
+  const { currentFrame } = useTelemetryStore.getState();
   const currentLap = currentFrame?.lap?.current_lap_num;
   if (!frameHistory.length || currentLap == null) return [];
 

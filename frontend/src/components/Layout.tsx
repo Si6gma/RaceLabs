@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { useEffect, useState, useMemo, memo } from 'react';
 import { Activity, GitCompare, Table, BarChart3, Settings, Radio } from 'lucide-react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
+import CarSelector from '@/components/CarSelector';
 
 const navItems = [
   { path: '/',         label: 'Live',     icon: Activity   },
@@ -97,6 +98,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-3 px-4 h-full border-l border-motorsport-border">
+          <CarSelector />
+
           {replayMode && (
             <span className="eng-chip bg-motorsport-purple/15 text-motorsport-purple border-motorsport-purple/30">
               REPLAY

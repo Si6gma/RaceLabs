@@ -10,11 +10,15 @@ import TelemetryTimeline from '@/components/TelemetryTimeline';
 function LiveDashboard() {
   const currentFrame = useTelemetryStore(s => s.currentFrame);
   const setSession   = useTelemetryStore(s => s.setSession);
+  const selectedCarIndex = useTelemetryStore(s => s.selectedCarIndex);
 
   const t = currentFrame?.telemetry;
   const m = currentFrame?.motion;
   const l = currentFrame?.lap;
   const s = currentFrame?.status;
+
+  // Highlight the car being watched on the map (defaults to the player's own car)
+  const viewedCarIndex = selectedCarIndex ?? currentFrame?.player_car_index;
 
   useEffect(() => {
     const poll = async () => {
@@ -69,7 +73,7 @@ function LiveDashboard() {
             <MiniTrackMapMemo
               trackId={currentFrame?.session?.track_id}
               trackLength={currentFrame?.session?.track_length}
-              playerCarIndex={currentFrame?.player_car_index}
+              playerCarIndex={viewedCarIndex}
               allLapDistances={currentFrame?.all_lap_distances}
               carTeamIds={currentFrame?.car_team_ids}
               posX={m?.world_pos_x}

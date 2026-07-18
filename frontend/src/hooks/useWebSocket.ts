@@ -77,6 +77,12 @@ export function useWebSocket() {
               session: (msg.session ?? prev?.session) as TelemetryFrame['session'] | undefined,
               all_lap_distances: (msg.all_lap_distances ?? prev?.all_lap_distances) as number[] | undefined,
               car_team_ids: (msg.car_team_ids ?? prev?.car_team_ids) as number[] | undefined,
+              motion_all: (msg.motion_all ?? prev?.motion_all) as TelemetryFrame['motion_all'],
+              lap_all: (msg.lap_all ?? prev?.lap_all) as TelemetryFrame['lap_all'],
+              telemetry_all: (msg.telemetry_all ?? prev?.telemetry_all) as TelemetryFrame['telemetry_all'],
+              status_all: (msg.status_all ?? prev?.status_all) as TelemetryFrame['status_all'],
+              damage_all: (msg.damage_all ?? prev?.damage_all) as TelemetryFrame['damage_all'],
+              participants: (msg.participants ?? prev?.participants) as TelemetryFrame['participants'],
             };
           } else if (msg.type === 'session') {
             setSession(msg.data as unknown as Parameters<typeof setSession>[0]);

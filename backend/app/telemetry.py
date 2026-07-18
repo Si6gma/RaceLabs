@@ -14,6 +14,11 @@ from app.decoder import TelemetryFrame, F1Decoder, DriverStatus, PitStatus, Resu
 
 logger = logging.getLogger(__name__)
 
+# Keys carrying all-22-car data — kept only on the live WebSocket stream.
+_MULTICAR_KEYS = frozenset({
+    "motion_all", "lap_all", "telemetry_all", "status_all", "damage_all", "participants",
+})
+
 
 @dataclass
 class LapBuffer:
@@ -187,9 +192,12 @@ class TelemetryPipeline:
             
         frame.timestamp = time.time()
         frame_dict = self.decoder.frame_to_dict(frame)
-        
+        # Per-car arrays are only for live spectating over the WebSocket. Strip them
+        # before buffering/recording, which are player-focused, to avoid ~22x bloat.
+        lean_dict = {k: v for k, v in frame_dict.items() if k not in _MULTICAR_KEYS}
+
         async with self._lock:
-            self.frame_buffer.append(frame_dict)
+            self.frame_buffer.append(lean_dict)
             self.current_frame = frame_dict
             
             if self.session_state is None:
@@ -248,7 +256,7 @@ class TelemetryPipeline:
                         if lap_num not in self.session_state.lap_buffers:
                             self.session_state.lap_buffers[lap_num] = LapBuffer(lap_number=lap_num)
 
-                        self.session_state.lap_buffers[lap_num].add_frame(frame_dict)
+                        self.session_state.lap_buffers[lap_num].add_frame(lean_dict)
 
                         if self.session_state.lap_buffers[lap_num].best_lap_time:
                             if self.session_state.best_lap_time is None or \

@@ -12,6 +12,22 @@ export interface TelemetryFrame {
   session?: SessionData;
   all_lap_distances?: number[];
   car_team_ids?: number[];
+  // Per-car arrays (all 22 slots) for spectating other cars in a multiplayer session
+  motion_all?: MotionData[];
+  lap_all?: LapData[];
+  telemetry_all?: CarTelemetry[];
+  status_all?: CarStatus[];
+  damage_all?: CarDamage[];
+  participants?: ParticipantInfo[];
+}
+
+export interface ParticipantInfo {
+  index: number;
+  name: string;
+  team_id: number;
+  race_number: number;
+  ai_controlled: boolean;
+  telemetry_public: boolean;
 }
 
 export interface MotionData {

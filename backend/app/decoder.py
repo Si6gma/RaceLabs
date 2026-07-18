@@ -274,6 +274,13 @@ class TelemetryFrame:
     session: Optional[SessionData] = None
     all_lap_distances: List[float] = field(default_factory=list)
     car_team_ids: List[int] = field(default_factory=list)
+    # Per-car arrays (all 22 slots) for spectating cars other than the player
+    motion_all: List[MotionData] = field(default_factory=list)
+    lap_all: List[LapData] = field(default_factory=list)
+    telemetry_all: List[CarTelemetry] = field(default_factory=list)
+    status_all: List[CarStatus] = field(default_factory=list)
+    damage_all: List[CarDamage] = field(default_factory=list)
+    participants: List[Dict[str, Any]] = field(default_factory=list)
     timestamp: float = 0.0
 
 
@@ -313,6 +320,8 @@ class F1Decoder:
             overall_frame_id = header[9]
             player_car = header[10]
             secondary_car = header[11]
+            # Spectating with no player car reports 255; clamp for safe array indexing.
+            pc = player_car if player_car < 22 else 0
 
             frame = TelemetryFrame(
                 packet_id=packet_type,
@@ -324,18 +333,23 @@ class F1Decoder:
             )
 
             if packet_type == PacketType.MOTION:
-                frame.motion = self._decode_motion(data, player_car)
+                frame.motion_all = [self._decode_motion(data, i) for i in range(22)]
+                frame.motion = frame.motion_all[pc]
             elif packet_type == PacketType.LAP_DATA:
-                frame.lap = self._decode_lap_data(data, player_car)
+                frame.lap_all = [self._decode_lap_data(data, i) for i in range(22)]
+                frame.lap = frame.lap_all[pc]
                 frame.all_lap_distances = self._decode_all_lap_distances(data)
             elif packet_type == PacketType.PARTICIPANTS:
-                frame.car_team_ids = self._decode_participants(data)
+                frame.car_team_ids, frame.participants = self._decode_participants_full(data)
             elif packet_type == PacketType.CAR_TELEMETRY:
-                frame.telemetry = self._decode_car_telemetry(data, player_car)
+                frame.telemetry_all = [self._decode_car_telemetry(data, i) for i in range(22)]
+                frame.telemetry = frame.telemetry_all[pc]
             elif packet_type == PacketType.CAR_STATUS:
-                frame.status = self._decode_car_status(data, player_car)
+                frame.status_all = [self._decode_car_status(data, i) for i in range(22)]
+                frame.status = frame.status_all[pc]
             elif packet_type == PacketType.CAR_DAMAGE:
-                frame.damage = self._decode_car_damage(data, player_car)
+                frame.damage_all = [self._decode_car_damage(data, i) for i in range(22)]
+                frame.damage = frame.damage_all[pc]
             elif packet_type == PacketType.SESSION:
                 frame.session = self._decode_session(data)
 
@@ -522,23 +536,45 @@ class F1Decoder:
         except Exception:
             return CarDamage()
 
-    def _decode_participants(self, data: bytes, num_cars: int = 22) -> List[int]:
-        """Extract team IDs for all participants. Auto-detects struct size from packet length.
-        F1 22=56 bytes, F1 23=57 bytes, F1 24=58 bytes. teamId is always at offset 3."""
-        TEAM_ID_OFFSET = 3
+    def _decode_participants_full(self, data: bytes, num_cars: int = 22):
+        """Decode the Participants packet. Auto-detects struct size from packet length
+        (F1 22=56 bytes, F1 23=57 bytes, F1 24=58 bytes). Within each car block the
+        relevant field offsets are stable across those versions:
+          aiControlled(0), teamId(3), raceNumber(5), name[48](7..54), yourTelemetry(55).
+        Returns (team_ids, participants) where team_ids has all 22 slots (for the track
+        map) and participants lists only the active cars (for the driver selector)."""
+        try:
+            num_active = struct.unpack_from('<B', data, self.HEADER_SIZE)[0]
+        except Exception:
+            num_active = num_cars
+        num_active = min(num_active, num_cars)
         payload = len(data) - self.HEADER_SIZE - 1  # subtract numActiveCars byte
-        # Derive exact struct size by dividing payload by the number of car slots.
         # The packet always carries 22 slots regardless of numActiveCars.
         exact = payload / num_cars
         struct_size = min((56, 57, 58), key=lambda s: abs(s - exact))
-        ids = []
+        team_ids: List[int] = []
+        participants: List[Dict[str, Any]] = []
         for i in range(num_cars):
-            offset = self.HEADER_SIZE + 1 + i * struct_size + TEAM_ID_OFFSET
+            base = self.HEADER_SIZE + 1 + i * struct_size
             try:
-                ids.append(struct.unpack_from('<B', data, offset)[0])
+                ai_controlled = struct.unpack_from('<B', data, base)[0]
+                team_id = struct.unpack_from('<B', data, base + 3)[0]
+                race_number = struct.unpack_from('<B', data, base + 5)[0]
+                name = data[base + 7:base + 7 + 48].split(b'\x00', 1)[0].decode('utf-8', errors='replace').strip()
+                your_telemetry = struct.unpack_from('<B', data, base + 55)[0]
             except Exception:
-                ids.append(255)
-        return ids
+                team_id, ai_controlled, race_number, name, your_telemetry = 255, 0, 0, "", 1
+            team_ids.append(team_id)
+            if i < num_active:
+                participants.append({
+                    "index": i,
+                    "name": name or f"Car {i + 1}",
+                    "team_id": team_id,
+                    "race_number": race_number,
+                    "ai_controlled": bool(ai_controlled),
+                    "telemetry_public": your_telemetry == 1,
+                })
+        return team_ids, participants
 
     def _decode_all_lap_distances(self, data: bytes, num_cars: int = 22) -> List[float]:
         """Extract lap_distance for every car. lap_distance is a float at byte +18 within each 50-byte car block."""
@@ -592,6 +628,113 @@ class F1Decoder:
         except Exception:
             return SessionData()
 
+    @staticmethod
+    def _motion_dict(m: MotionData) -> Dict[str, Any]:
+        return {
+            "world_pos_x": m.world_pos_x,
+            "world_pos_y": m.world_pos_y,
+            "world_pos_z": m.world_pos_z,
+            "g_force_lat": m.g_force_lat,
+            "g_force_lon": m.g_force_lon,
+            "g_force_vert": m.g_force_vert,
+            "yaw": m.yaw,
+            "pitch": m.pitch,
+            "roll": m.roll,
+            "wheel_speed": m.wheel_speed,
+        }
+
+    @staticmethod
+    def _lap_dict(lap: LapData) -> Dict[str, Any]:
+        return {
+            "last_lap_time_ms": lap.last_lap_time_ms,
+            "current_lap_time_ms": lap.current_lap_time_ms,
+            "sector1_time_ms": lap.sector1_time_ms,
+            "sector2_time_ms": lap.sector2_time_ms,
+            "lap_distance": lap.lap_distance,
+            "total_distance": lap.total_distance,
+            "car_position": lap.car_position,
+            "current_lap_num": lap.current_lap_num,
+            "pit_status": lap.pit_status,
+            "num_pit_stops": lap.num_pit_stops,
+            "sector": lap.sector,
+            "current_lap_invalid": lap.current_lap_invalid,
+            "penalties": lap.penalties,
+            "total_warnings": lap.total_warnings,
+            "corner_cutting_warnings": lap.corner_cutting_warnings,
+            "driver_status": lap.driver_status,
+            "result_status": lap.result_status,
+            "grid_position": lap.grid_position,
+            "pit_lane_timer_active": lap.pit_lane_timer_active,
+            "pit_lane_time_in_lane_in_ms": lap.pit_lane_time_in_lane_in_ms,
+            "pit_stop_timer_in_ms": lap.pit_stop_timer_in_ms,
+            "lap_phase": lap.lap_phase,
+            "is_in_pits": lap.is_in_pits,
+            "is_on_flying_lap": lap.is_on_flying_lap,
+            "is_out_lap": lap.is_out_lap,
+            "is_in_lap": lap.is_in_lap,
+            "is_in_garage": lap.is_in_garage,
+            "is_on_track": lap.is_on_track,
+            "is_active": lap.is_active,
+        }
+
+    @staticmethod
+    def _telemetry_dict(t: CarTelemetry) -> Dict[str, Any]:
+        return {
+            "speed": t.speed,
+            "throttle": round(t.throttle, 3),
+            "steer": round(t.steer, 3),
+            "brake": round(t.brake, 3),
+            "clutch": t.clutch,
+            "gear": t.gear,
+            "engine_rpm": t.engine_rpm,
+            "drs": t.drs,
+            "rev_lights_percent": t.rev_lights_percent,
+            "brakes_temp": t.brakes_temp,
+            "tyres_surface_temp": t.tyres_surface_temp,
+            "tyres_inner_temp": t.tyres_inner_temp,
+            "engine_temp": t.engine_temp,
+            "tyres_pressure": [round(p, 2) for p in t.tyres_pressure],
+            "surface_type": t.surface_type,
+        }
+
+    @staticmethod
+    def _status_dict(s: CarStatus) -> Dict[str, Any]:
+        return {
+            "fuel_in_tank": round(s.fuel_in_tank, 2),
+            "fuel_capacity": round(s.fuel_capacity, 2),
+            "fuel_remaining_laps": round(s.fuel_remaining_laps, 2),
+            "drs_allowed": s.drs_allowed,
+            "pit_limiter_status": s.pit_limiter_status,
+            "tyres_wear": s.tyres_wear,
+            "tyre_compound": s.visual_tyre_compound,
+            "tyres_age_laps": s.tyres_age_laps,
+            "front_left_wing_damage": s.front_left_wing_damage,
+            "front_right_wing_damage": s.front_right_wing_damage,
+            "rear_wing_damage": s.rear_wing_damage,
+            "engine_damage": s.engine_damage,
+            "gearbox_damage": s.gearbox_damage,
+            "ers_store_energy": round(s.ers_store_energy, 2),
+            "ers_deploy_mode": s.ers_deploy_mode,
+            "ers_harvested_this_lap_mguk": round(s.ers_harvested_this_lap_mguk, 2),
+            "ers_harvested_this_lap_mguh": round(s.ers_harvested_this_lap_mguh, 2),
+            "ers_deployed_this_lap": round(s.ers_deployed_this_lap, 2),
+        }
+
+    @staticmethod
+    def _damage_dict(d: CarDamage) -> Dict[str, Any]:
+        return {
+            "tyres_wear": [round(w, 2) for w in d.tyres_wear],
+            "tyres_damage": d.tyres_damage,
+            "front_left_wing_damage": d.front_left_wing_damage,
+            "front_right_wing_damage": d.front_right_wing_damage,
+            "rear_wing_damage": d.rear_wing_damage,
+            "floor_damage": d.floor_damage,
+            "diffuser_damage": d.diffuser_damage,
+            "sidepod_damage": d.sidepod_damage,
+            "gear_box_damage": d.gear_box_damage,
+            "engine_damage": d.engine_damage,
+        }
+
     def frame_to_dict(self, frame: TelemetryFrame) -> Dict[str, Any]:
         result = {
             "packet_id": frame.packet_id,
@@ -602,114 +745,41 @@ class F1Decoder:
             "timestamp": frame.timestamp,
         }
 
+        # Player-car fields (top level) — kept for session recording/backward compat.
+        # Per-car arrays (`*_all`) let the frontend spectate any car in the session.
         if frame.motion:
-            result["motion"] = {
-                "world_pos_x": frame.motion.world_pos_x,
-                "world_pos_y": frame.motion.world_pos_y,
-                "world_pos_z": frame.motion.world_pos_z,
-                "g_force_lat": frame.motion.g_force_lat,
-                "g_force_lon": frame.motion.g_force_lon,
-                "g_force_vert": frame.motion.g_force_vert,
-                "yaw": frame.motion.yaw,
-                "pitch": frame.motion.pitch,
-                "roll": frame.motion.roll,
-                "wheel_speed": frame.motion.wheel_speed,
-            }
+            result["motion"] = self._motion_dict(frame.motion)
+        if frame.motion_all:
+            result["motion_all"] = [self._motion_dict(m) for m in frame.motion_all]
 
         if frame.lap:
-            lap = frame.lap
-            result["lap"] = {
-                "last_lap_time_ms": lap.last_lap_time_ms,
-                "current_lap_time_ms": lap.current_lap_time_ms,
-                "sector1_time_ms": lap.sector1_time_ms,
-                "sector2_time_ms": lap.sector2_time_ms,
-                "lap_distance": lap.lap_distance,
-                "total_distance": lap.total_distance,
-                "car_position": lap.car_position,
-                "current_lap_num": lap.current_lap_num,
-                "pit_status": lap.pit_status,
-                "num_pit_stops": lap.num_pit_stops,
-                "sector": lap.sector,
-                "current_lap_invalid": lap.current_lap_invalid,
-                "penalties": lap.penalties,
-                "total_warnings": lap.total_warnings,
-                "corner_cutting_warnings": lap.corner_cutting_warnings,
-                "driver_status": lap.driver_status,
-                "result_status": lap.result_status,
-                "grid_position": lap.grid_position,
-                "pit_lane_timer_active": lap.pit_lane_timer_active,
-                "pit_lane_time_in_lane_in_ms": lap.pit_lane_time_in_lane_in_ms,
-                "pit_stop_timer_in_ms": lap.pit_stop_timer_in_ms,
-                "lap_phase": lap.lap_phase,
-                "is_in_pits": lap.is_in_pits,
-                "is_on_flying_lap": lap.is_on_flying_lap,
-                "is_out_lap": lap.is_out_lap,
-                "is_in_lap": lap.is_in_lap,
-                "is_in_garage": lap.is_in_garage,
-                "is_on_track": lap.is_on_track,
-                "is_active": lap.is_active,
-            }
+            result["lap"] = self._lap_dict(frame.lap)
+        if frame.lap_all:
+            result["lap_all"] = [self._lap_dict(l) for l in frame.lap_all]
 
         if frame.telemetry:
-            result["telemetry"] = {
-                "speed": frame.telemetry.speed,
-                "throttle": round(frame.telemetry.throttle, 3),
-                "steer": round(frame.telemetry.steer, 3),
-                "brake": round(frame.telemetry.brake, 3),
-                "clutch": frame.telemetry.clutch,
-                "gear": frame.telemetry.gear,
-                "engine_rpm": frame.telemetry.engine_rpm,
-                "drs": frame.telemetry.drs,
-                "rev_lights_percent": frame.telemetry.rev_lights_percent,
-                "brakes_temp": frame.telemetry.brakes_temp,
-                "tyres_surface_temp": frame.telemetry.tyres_surface_temp,
-                "tyres_inner_temp": frame.telemetry.tyres_inner_temp,
-                "engine_temp": frame.telemetry.engine_temp,
-                "tyres_pressure": [round(p, 2) for p in frame.telemetry.tyres_pressure],
-                "surface_type": frame.telemetry.surface_type,
-            }
+            result["telemetry"] = self._telemetry_dict(frame.telemetry)
+        if frame.telemetry_all:
+            result["telemetry_all"] = [self._telemetry_dict(t) for t in frame.telemetry_all]
 
         if frame.status:
-            result["status"] = {
-                "fuel_in_tank": round(frame.status.fuel_in_tank, 2),
-                "fuel_capacity": round(frame.status.fuel_capacity, 2),
-                "fuel_remaining_laps": round(frame.status.fuel_remaining_laps, 2),
-                "drs_allowed": frame.status.drs_allowed,
-                "pit_limiter_status": frame.status.pit_limiter_status,
-                "tyres_wear": frame.status.tyres_wear,
-                "tyre_compound": frame.status.visual_tyre_compound,
-                "tyres_age_laps": frame.status.tyres_age_laps,
-                "front_left_wing_damage": frame.status.front_left_wing_damage,
-                "front_right_wing_damage": frame.status.front_right_wing_damage,
-                "rear_wing_damage": frame.status.rear_wing_damage,
-                "engine_damage": frame.status.engine_damage,
-                "gearbox_damage": frame.status.gearbox_damage,
-                "ers_store_energy": round(frame.status.ers_store_energy, 2),
-                "ers_deploy_mode": frame.status.ers_deploy_mode,
-                "ers_harvested_this_lap_mguk": round(frame.status.ers_harvested_this_lap_mguk, 2),
-                "ers_harvested_this_lap_mguh": round(frame.status.ers_harvested_this_lap_mguh, 2),
-                "ers_deployed_this_lap": round(frame.status.ers_deployed_this_lap, 2),
-            }
+            result["status"] = self._status_dict(frame.status)
+        if frame.status_all:
+            result["status_all"] = [self._status_dict(s) for s in frame.status_all]
 
         if frame.damage:
-            result["damage"] = {
-                "tyres_wear": [round(w, 2) for w in frame.damage.tyres_wear],
-                "tyres_damage": frame.damage.tyres_damage,
-                "front_left_wing_damage": frame.damage.front_left_wing_damage,
-                "front_right_wing_damage": frame.damage.front_right_wing_damage,
-                "rear_wing_damage": frame.damage.rear_wing_damage,
-                "floor_damage": frame.damage.floor_damage,
-                "diffuser_damage": frame.damage.diffuser_damage,
-                "sidepod_damage": frame.damage.sidepod_damage,
-                "gear_box_damage": frame.damage.gear_box_damage,
-                "engine_damage": frame.damage.engine_damage,
-            }
+            result["damage"] = self._damage_dict(frame.damage)
+        if frame.damage_all:
+            result["damage_all"] = [self._damage_dict(d) for d in frame.damage_all]
 
         if frame.all_lap_distances:
             result["all_lap_distances"] = frame.all_lap_distances
 
         if frame.car_team_ids:
             result["car_team_ids"] = frame.car_team_ids
+
+        if frame.participants:
+            result["participants"] = frame.participants
 
         if frame.session:
             result["session"] = {

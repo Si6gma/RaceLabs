@@ -56,61 +56,59 @@ function bounds(pts: Pt[]) {
   return { minX, maxX, minY, maxY };
 }
 
-// Find the rotation (0–179°) that maximises fill of the canvas.
-function bestAngle(centerline: Pt[], W: number, H: number, pad = 16): number {
-  let best = 0, bestScale = 0;
-  for (let deg = 0; deg < 180; deg++) {
-    const r = (deg * Math.PI) / 180;
-    const cos = Math.cos(r), sin = Math.sin(r);
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const [x, y] of centerline) {
-      const rx = x * cos - y * sin, ry = x * sin + y * cos;
-      if (rx < minX) minX = rx; if (rx > maxX) maxX = rx;
-      if (ry < minY) minY = ry; if (ry > maxY) maxY = ry;
-    }
-    const s = Math.min((W - pad * 2) / (maxX - minX || 1), (H - pad * 2) / (maxY - minY || 1));
-    if (s > bestScale) { bestScale = s; best = r; }
-  }
-  return best;
-}
-
-// Rotate all points by angle then scale/offset to fill the canvas.
-// Uses the bounding box of `refPts` (usually all edge points combined) for the transform.
-function project(pts: Pt[], angle: number, scale: number, offX: number, offY: number): Pt[] {
-  const cos = Math.cos(angle), sin = Math.sin(angle);
-  return pts.map(([x, y]) => {
-    const rx = x * cos - y * sin, ry = x * sin + y * cos;
-    return [rx * scale + offX, ry * scale + offY];
-  });
+// Scale and offset points to fill the canvas. Track data is pre-oriented to each
+// circuit's real-world orientation, so no rotation is applied.
+function project(pts: Pt[], scale: number, offX: number, offY: number): Pt[] {
+  return pts.map(([x, y]) => [x * scale + offX, y * scale + offY] as Pt);
 }
 
 function buildScreenGeometry(outline: TrackOutline, W: number, H: number, pad = 16) {
-  const angle = bestAngle(outline.centerline, W, H, pad);
-  const cos = Math.cos(angle), sin = Math.sin(angle);
-
-  // Rotate all edge points to find the real bounding box of the track shape
-  const allRot: Pt[] = [...outline.edge_right, ...outline.edge_left].map(([x, y]) => [
-    x * cos - y * sin, x * sin + y * cos,
-  ]);
-  const b = bounds(allRot);
+  // Bounding box of the whole track shape (both edges)
+  const b = bounds([...outline.edge_right, ...outline.edge_left]);
   const rangeX = b.maxX - b.minX || 1, rangeY = b.maxY - b.minY || 1;
   const scale = Math.min((W - pad * 2) / rangeX, (H - pad * 2) / rangeY);
   const offX = (W - rangeX * scale) / 2 - b.minX * scale;
   const offY = (H - rangeY * scale) / 2 - b.minY * scale;
 
+  const centerline = project(outline.centerline, scale, offX, offY);
+
   return {
-    edgeRight: project(outline.edge_right, angle, scale, offX, offY),
-    edgeLeft:  project(outline.edge_left,  angle, scale, offX, offY),
-    centerline: project(outline.centerline, angle, scale, offX, offY),
+    edgeRight: project(outline.edge_right, scale, offX, offY),
+    edgeLeft:  project(outline.edge_left,  scale, offX, offY),
+    centerline,
+    arcLengths: cumulativeLengths(centerline),
   };
 }
 
-function interpCenterline(centerline: Pt[], t: number): Pt {
+// Cumulative distance along a polyline, normalised to 0..1. Centerline points are
+// not evenly spaced (long straights are sampled sparsely), so lap distance has to
+// be looked up by arc length rather than by point index.
+function cumulativeLengths(pts: Pt[]): number[] {
+  const out = new Array<number>(pts.length);
+  out[0] = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+    out[i] = out[i - 1] + Math.hypot(dx, dy);
+  }
+  const total = out[out.length - 1] || 1;
+  for (let i = 0; i < out.length; i++) out[i] /= total;
+  return out;
+}
+
+function interpCenterline(centerline: Pt[], arcLengths: number[], t: number): Pt {
   const n = centerline.length;
   if (n === 0) return [0, 0];
-  const raw = Math.max(0, Math.min(1, t)) * (n - 1);
-  const lo = Math.floor(raw), hi = Math.min(lo + 1, n - 1);
-  const f = raw - lo;
+  const target = Math.max(0, Math.min(1, t));
+
+  // Binary search for the segment containing `target`
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (arcLengths[mid] <= target) lo = mid; else hi = mid;
+  }
+
+  const span = arcLengths[hi] - arcLengths[lo];
+  const f = span > 0 ? (target - arcLengths[lo]) / span : 0;
   return [centerline[lo][0] + (centerline[hi][0] - centerline[lo][0]) * f,
           centerline[lo][1] + (centerline[hi][1] - centerline[lo][1]) * f];
 }
@@ -126,7 +124,7 @@ function strokePoly(ctx: CanvasRenderingContext2D, pts: Pt[]) {
 
 interface GeoCache {
   trackId: number; W: number; H: number; dpr: number;
-  edgeRight: Pt[]; edgeLeft: Pt[]; centerline: Pt[];
+  edgeRight: Pt[]; edgeLeft: Pt[]; centerline: Pt[]; arcLengths: number[];
 }
 
 function TrackMap({
@@ -226,7 +224,7 @@ function TrackMap({
           for (let i = 0; i < dists.length; i++) {
             if (dists[i] <= 0) continue;
             const t = Math.max(0, Math.min(1, dists[i] / tlen));
-            const [sx, sy] = interpCenterline(geo.centerline, t);
+            const [sx, sy] = interpCenterline(geo.centerline, geo.arcLengths, t);
             const isPlayer = i === pci;
             const color = teamColor(teams?.[i] as number | undefined);
 

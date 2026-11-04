@@ -677,6 +677,8 @@ class F1Decoder:
             "sector2_time_minutes": lap.sector2_time_minutes,
             "lap_distance": lap.lap_distance,
             "total_distance": lap.total_distance,
+            "delta_to_car_in_front_ms": lap.delta_to_car_in_front_ms,
+            "delta_to_race_leader_ms": lap.delta_to_race_leader_ms,
             "car_position": lap.car_position,
             "current_lap_num": lap.current_lap_num,
             "pit_status": lap.pit_status,

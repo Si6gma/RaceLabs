@@ -51,6 +51,8 @@ export interface LapData {
   sector2_time_ms: number;
   lap_distance: number;
   total_distance: number;
+  delta_to_car_in_front_ms: number;
+  delta_to_race_leader_ms: number;
   car_position: number;
   current_lap_num: number;
   pit_status: number;
@@ -135,6 +137,7 @@ export interface SessionSummary {
   track_temp: number;
   air_temp: number;
   lap_count: number;
+  recorded_laps: number;
   is_active: boolean;
 }
 

@@ -1,6 +1,7 @@
-import { memo } from 'react';
+import { memo, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatTime } from '@/utils/formatters';
+import { GapTracker, RACE_SESSION_TYPES, type Gap } from '@/utils/raceGaps';
 
 function deltaColor(ms: number): string {
   if (ms <= 0)   return '#00E85A';
@@ -8,11 +9,50 @@ function deltaColor(ms: number): string {
   return '#FF2044';
 }
 
+function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; name: string; behind: boolean }) {
+  // Ahead: a shrinking gap is good. Behind: a growing gap is good.
+  const trend = gap?.trendMs ?? null;
+  const good  = trend == null ? null : behind ? trend > 0 : trend < 0;
+  const word  = trend == null ? '' : behind ? (trend < 0 ? 'closing' : 'dropping') : (trend < 0 ? 'gaining' : 'losing');
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="eng-label">{label}</span>
+        <span className="font-telemetry text-[10px] text-motorsport-muted truncate">{gap ? name : '—'}</span>
+      </div>
+      <div className="flex items-baseline justify-between">
+        <span className="font-telemetry text-[17px] font-bold tabular-nums text-motorsport-text">
+          {gap ? `${behind ? '-' : '+'}${(gap.gapMs / 1000).toFixed(3)}` : '--.---'}
+        </span>
+        <span
+          className="font-telemetry text-[10px] tabular-nums"
+          style={{ color: good == null ? '#4A6078' : good ? '#00E85A' : '#FF2044' }}
+        >
+          {trend == null ? (gap ? '1 lap to trend' : '') : `${word} ${(Math.abs(trend) / 1000).toFixed(2)}/lap`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function TimingTower() {
   const l       = useTelemetryStore(s => s.currentFrame?.lap);
   const t       = useTelemetryStore(s => s.currentFrame?.telemetry);
   const s       = useTelemetryStore(s => s.currentFrame?.status);
   const session = useTelemetryStore(s => s.session);
+  const lapAll      = useTelemetryStore(s => s.currentFrame?.lap_all);
+  const sessionData = useTelemetryStore(s => s.currentFrame?.session);
+  const playerIdx   = useTelemetryStore(s => s.currentFrame?.player_car_index);
+  const selectedIdx = useTelemetryStore(s => s.selectedCarIndex);
+  const participants = useTelemetryStore(s => s.participants);
+  const tracker = useRef(new GapTracker());
+
+  const isRace = sessionData != null && RACE_SESSION_TYPES.has(sessionData.session_type);
+  const viewedIdx = selectedIdx ?? playerIdx ?? 0;
+  const gaps = isRace && lapAll
+    ? tracker.current.update(lapAll, viewedIdx, sessionData?.track_length ?? 0)
+    : { ahead: null, behind: null };
+  const nameOf = (idx: number) => participants.find(p => p.index === idx)?.name ?? `Car ${idx + 1}`;
 
   const position  = l?.car_position ?? 0;
   const lapNum    = l?.current_lap_num ?? 0;
@@ -63,7 +103,13 @@ function TimingTower() {
           </div>
         </div>
 
-        {/* Delta — hero number */}
+        {/* Races: gaps to the cars either side. Otherwise: delta vs best. */}
+        {isRace ? (
+        <div className="px-2.5 py-2 bg-motorsport-dark/50 shrink-0 flex flex-col gap-2">
+          <GapRow label="AHEAD" gap={gaps.ahead} name={gaps.ahead ? nameOf(gaps.ahead.carIndex) : ''} behind={false} />
+          <GapRow label="BEHIND" gap={gaps.behind} name={gaps.behind ? nameOf(gaps.behind.carIndex) : ''} behind />
+        </div>
+        ) : (
         <div className="px-2.5 py-2 bg-motorsport-dark/50 shrink-0">
           <span className="eng-label block mb-1">DELTA VS BEST</span>
           <span
@@ -78,6 +124,7 @@ function TimingTower() {
               : `${deltaMs > 0 ? '+' : ''}${(deltaMs / 1000).toFixed(3)}s`}
           </span>
         </div>
+        )}
 
         {/* Current lap */}
         <div className="px-2.5 py-1.5 flex items-center justify-between shrink-0">

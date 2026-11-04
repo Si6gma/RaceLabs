@@ -423,6 +423,8 @@ class TelemetryPipeline:
             "track_temp": session.track_temp,
             "air_temp": session.air_temp,
             "lap_count": len(session.lap_buffers),
+            # Laps with frames that are over, i.e. not the one still being driven
+            "recorded_laps": sum(1 for n in session.lap_buffers if n < session.current_lap),
             "timed_lap_count": timed_laps,
             "out_lap_count": out_laps,
             "in_lap_count": in_laps,

@@ -116,6 +116,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           >
             <span className={`w-[6px] h-[6px] ${recording ? 'bg-motorsport-red animate-pulse' : 'bg-motorsport-dim'}`} />
             REC
+            {(session?.recorded_laps ?? 0) > 0 && (
+              <span className="font-telemetry tabular-nums" title="Completed laps recorded this session">
+                · {session!.recorded_laps} {session!.recorded_laps === 1 ? 'LAP' : 'LAPS'}
+              </span>
+            )}
           </button>
 
           <GameStatusIndicatorMemo sessionLabel={sessionLabel} />

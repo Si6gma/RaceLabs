@@ -172,10 +172,9 @@ function TimingTower() {
           </div>
         </div>
 
-        {/* Session best */}
-        <div className="px-3 py-2.5 flex items-center justify-between shrink-0">
-          <span className="eng-label">Best</span>
-          <span className="font-telemetry text-[18px] font-semibold tabular-nums leading-none text-motorsport-purple">
+        {/* Session best: purple is the F1 colour for it, so no label needed */}
+        <div className="px-3 py-3 flex items-center justify-center shrink-0">
+          <span className="font-telemetry text-[28px] font-bold tabular-nums leading-none text-motorsport-purple">
             {bestMs ? formatTime(bestMs) : '--:--.---'}
           </span>
         </div>

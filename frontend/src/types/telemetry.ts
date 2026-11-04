@@ -48,7 +48,9 @@ export interface LapData {
   last_lap_time_ms: number;
   current_lap_time_ms: number;
   sector1_time_ms: number;
+  sector1_time_minutes?: number;
   sector2_time_ms: number;
+  sector2_time_minutes?: number;
   lap_distance: number;
   total_distance: number;
   delta_to_car_in_front_ms: number;

@@ -2,6 +2,14 @@ import { memo, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatTime } from '@/utils/formatters';
 import { GapTracker, RACE_SESSION_TYPES, type Gap } from '@/utils/raceGaps';
+import { SectorTracker, type SectorColour } from '@/utils/sectorTimes';
+
+const SECTOR_COLOURS: Record<SectorColour, string> = {
+  purple: '#8855FF',
+  green:  '#00E85A',
+  yellow: '#FFD000',
+  none:   '#7A8EA3',
+};
 
 function deltaColor(ms: number): string {
   if (ms <= 0)   return '#00E85A';
@@ -49,12 +57,18 @@ function TimingTower() {
   const selectedIdx = useTelemetryStore(s => s.selectedCarIndex);
   const participants = useTelemetryStore(s => s.participants);
   const tracker = useRef(new GapTracker());
+  const sectors = useRef({ sessionId: '', tracker: new SectorTracker() });
+  if (session?.session_id && session.session_id !== sectors.current.sessionId) {
+    sectors.current = { sessionId: session.session_id, tracker: new SectorTracker() };
+  }
 
   const isRace = sessionData != null && RACE_SESSION_TYPES.has(sessionData.session_type);
   const viewedIdx = selectedIdx ?? playerIdx ?? 0;
   const gaps = isRace && lapAll
     ? tracker.current.update(lapAll, viewedIdx, sessionData?.track_length ?? 0)
     : { ahead: null, behind: null };
+  if (lapAll) sectors.current.tracker.update(lapAll);
+  const sectorTimes = sectors.current.tracker.latestFor(viewedIdx);
   const nameOf = (idx: number) => participants.find(p => p.index === idx)?.name ?? `Car ${idx + 1}`;
 
   const position  = l?.car_position ?? 0;
@@ -62,15 +76,11 @@ function TimingTower() {
   const totalLaps = session?.total_laps ?? 0;
   const currentMs = l?.current_lap_time_ms ?? 0;
   const bestMs    = session?.best_lap_time ?? null;
-  const lastMs    = l?.last_lap_time_ms ?? 0;
   const invalid   = l?.current_lap_invalid ?? false;
   const pitStatus = l?.pit_status ?? 0;
   const deltaMs   = bestMs && currentMs > 0 ? currentMs - bestMs : null;
   const drsActive  = t?.drs === 1;
   const drsAllowed = s?.drs_allowed === 1;
-  const s1ms = l?.sector1_time_ms ?? 0;
-  const s2ms = l?.sector2_time_ms ?? 0;
-  const s3ms = lastMs && s1ms && s2ms ? Math.max(0, lastMs - s1ms - s2ms) : 0;
 
   return (
     <div className="telemetry-panel flex flex-col h-full overflow-hidden">
@@ -145,11 +155,14 @@ function TimingTower() {
         {/* Sectors */}
         <div className="px-2.5 py-1.5 shrink-0">
           <div className="grid grid-cols-3 gap-1.5">
-            {[['S1', s1ms], ['S2', s2ms], ['S3', s3ms]].map(([sec, ms]) => (
-              <div key={sec as string} className="flex flex-col gap-0.5">
-                <span className="eng-label">{sec as string}</span>
-                <span className="font-telemetry text-[11px] tabular-nums text-motorsport-muted">
-                  {(ms as number) > 0 ? formatTime(ms as number) : '--:--.---'}
+            {sectorTimes.map((sec, i) => (
+              <div key={i} className="flex flex-col gap-0.5">
+                <span className="eng-label">S{i + 1}</span>
+                <span
+                  className="font-telemetry text-[11px] font-semibold tabular-nums"
+                  style={{ color: sec ? SECTOR_COLOURS[sec.colour] : '#4A6078' }}
+                >
+                  {sec ? formatTime(sec.ms) : '--:--.---'}
                 </span>
               </div>
             ))}

@@ -24,6 +24,7 @@ PURPLE = (160, 0, 255)
 AMBER = (255, 120, 0)
 YELLOW = (255, 210, 0)
 WHITE = (255, 240, 220)
+RACELABS_ORANGE = (255, 119, 0)  # #FF7700, the dashboard accent
 
 # name -> (steps of (seconds, left, right), loops). Holds loop, flashes don't.
 PATTERNS: Dict[str, Tuple[List[Tuple[float, Lamp, Lamp]], bool]] = {
@@ -42,6 +43,10 @@ PATTERNS: Dict[str, Tuple[List[Tuple[float, Lamp, Lamp]], bool]] = {
     "penalty": ([(0.4, _c(RED, 100), _c(RED, 100)), (0.3, OFF, OFF), (0.4, _c(RED, 100), _c(RED, 100))], False),
     "fastest": ([(2.0, _c(PURPLE, 100), _c(PURPLE, 100))], False),
     "pb": ([(2.0, _c(GREEN, 100), _c(GREEN, 100))], False),
+    "sector_purple": ([(1.0, _c(PURPLE, 100), _c(PURPLE, 100))], False),
+    "sector_green": ([(1.0, _c(GREEN, 100), _c(GREEN, 100))], False),
+    "sector_yellow": ([(1.0, _c(YELLOW, 100), _c(YELLOW, 100))], False),
+    "garage": ([(1.0, _c(RACELABS_ORANGE, 30), _c(RACELABS_ORANGE, 30))], True),
     "pit": ([(1.0, _c(WHITE, 40), _c(WHITE, 40))], True),
 }
 
@@ -49,7 +54,8 @@ PATTERNS: Dict[str, Tuple[List[Tuple[float, Lamp, Lamp]], bool]] = {
 PRIORITY = [
     "red_flag", "start_5", "start_4", "start_3", "start_2", "start_1",
     "lights_out", "chequered", "safety_car", "vsc", "yellow",
-    "penalty", "fastest", "pb", "pit",
+    "penalty", "fastest", "pb", "sector_purple", "sector_green", "sector_yellow",
+    "garage", "pit",
 ]
 _RANK = {name: i for i, name in enumerate(PRIORITY)}
 _STARTS = [f"start_{n}" for n in range(1, 6)]
@@ -57,6 +63,9 @@ _STARTS = [f"start_{n}" for n in range(1, 6)]
 FIA_YELLOW = 3
 SC_FULL = 1
 SC_VIRTUAL = 2
+RACE_SESSION_TYPES = {10, 11, 12}
+# DriverStatus: only these count as a timed lap for sector colours.
+TIMED_DRIVER_STATUS = {1, 4}  # flying lap, on track
 
 
 def _duration(name: str) -> float:
@@ -76,6 +85,11 @@ class RaceLights:
         self._lap_num = 0
         self._lap_invalid = False
         self._completed_lap_invalid = False
+        self._session_type = 0
+        # car index -> (sector, s1_ms, s2_ms, invalid, driver_status) from its last frame
+        self._cars: Dict[int, Tuple[int, int, int, bool, int]] = {}
+        self._session_best: List[Optional[int]] = [None, None, None]
+        self._my_best: List[Optional[int]] = [None, None, None]
 
     def _hold(self, name: str, on: bool, now: float):
         if on:
@@ -94,6 +108,7 @@ class RaceLights:
             sc = session.get("safety_car_status", 0)
             self._hold("safety_car", sc == SC_FULL, now)
             self._hold("vsc", sc == SC_VIRTUAL, now)
+            self._session_type = session.get("session_type", 0)
 
         status = frame.get("status")
         if status:
@@ -102,12 +117,15 @@ class RaceLights:
         lap = frame.get("lap")
         if lap:
             self._feed_lap(lap, now)
+        if frame.get("lap_all") and self._session_type not in RACE_SESSION_TYPES:
+            self._feed_sectors(frame["lap_all"], player, now)
 
         event = frame.get("event")
         if event:
             self._feed_event(event, player, now)
 
     def _feed_lap(self, lap: Dict[str, Any], now: float):
+        self._hold("garage", bool(lap.get("is_in_garage")), now)
         self._hold("pit", lap.get("pit_status", 0) > 0, now)
 
         invalid = bool(lap.get("current_lap_invalid"))
@@ -129,6 +147,45 @@ class RaceLights:
                     self._flash("pb", now)
                 if self._best_lap_ms is None or last < self._best_lap_ms:
                     self._best_lap_ms = last
+
+    def _feed_sectors(self, cars: List[Dict[str, Any]], player: int, now: float):
+        """Flash purple/green/yellow as the player completes a sector, like F1 timing."""
+        for idx, car in enumerate(cars):
+            sector = car.get("sector", 0)
+            s1 = car.get("sector1_time_minutes", 0) * 60000 + car.get("sector1_time_ms", 0)
+            s2 = car.get("sector2_time_minutes", 0) * 60000 + car.get("sector2_time_ms", 0)
+            invalid = bool(car.get("current_lap_invalid"))
+            status = car.get("driver_status", 0)
+            prev = self._cars.get(idx)
+            self._cars[idx] = (sector, s1, s2, invalid, status)
+            if prev is None or prev[0] == sector:
+                continue
+            prev_sector, prev_s1, prev_s2, prev_invalid, prev_status = prev
+            if prev_sector == 0 and sector == 1:
+                done, t = 0, s1
+            elif prev_sector == 1 and sector == 2:
+                done, t = 1, s2
+            elif prev_sector == 2 and sector == 0:
+                # s1/s2 reset with the new lap, so sector 3 comes from the previous frame.
+                done, t = 2, car.get("last_lap_time_ms", 0) - prev_s1 - prev_s2
+            else:
+                continue
+            if t <= 0 or prev_invalid or prev_status not in TIMED_DRIVER_STATUS:
+                continue
+
+            best = self._session_best[done]
+            if idx == player:
+                mine = self._my_best[done]
+                if best is None or t < best:
+                    self._flash("sector_purple", now)
+                elif mine is None or t < mine:
+                    self._flash("sector_green", now)
+                else:
+                    self._flash("sector_yellow", now)
+                if mine is None or t < mine:
+                    self._my_best[done] = t
+            if best is None or t < best:
+                self._session_best[done] = t
 
     def _feed_event(self, event: Dict[str, Any], player: int, now: float):
         code = event.get("code")

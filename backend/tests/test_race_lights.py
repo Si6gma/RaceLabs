@@ -2,7 +2,7 @@ import struct
 import unittest
 
 from app.decoder import F1Decoder
-from app.race_lights import AMBER, GREEN, PURPLE, RED, YELLOW, RaceLights
+from app.race_lights import AMBER, GREEN, PURPLE, RACELABS_ORANGE, RED, YELLOW, RaceLights
 
 PLAYER = 3
 
@@ -161,6 +161,59 @@ class RaceLightsTest(unittest.TestCase):
         self.l.feed(ev("SEND"), 1)
         self.assertTrue(self.l.ended)
         self.assertIsNone(self.l.look(1))
+
+
+    def test_garage_glows_orange_at_30(self):
+        self.l.feed({"player_car_index": PLAYER, "lap": {"is_in_garage": True, "pit_status": 2}}, 0)
+        self.assertEqual(self.l.look(0.1), ((*RACELABS_ORANGE, 30), (*RACELABS_ORANGE, 30)))
+        self.l.feed({"player_car_index": PLAYER, "lap": {"is_in_garage": False, "pit_status": 0}}, 5)
+        self.assertIsNone(self.l.look(5))
+
+
+def cars(player_sector, player_s1=0, player_s2=0, rival_sector=0, rival_s1=0, last_ms=0, status=1, invalid=False):
+    grid = [{"sector": 0, "driver_status": 0} for _ in range(22)]
+    grid[PLAYER] = {"sector": player_sector, "sector1_time_ms": player_s1, "sector2_time_ms": player_s2,
+                    "last_lap_time_ms": last_ms, "driver_status": status, "current_lap_invalid": invalid}
+    grid[0] = {"sector": rival_sector, "sector1_time_ms": rival_s1, "driver_status": 1}
+    return {"player_car_index": PLAYER, "session": {"session_type": 9}, "lap_all": grid}
+
+
+class SectorTest(unittest.TestCase):
+    def setUp(self):
+        self.l = RaceLights()
+
+    def test_purple_when_fastest_of_anyone(self):
+        self.l.feed(cars(0), 0)
+        self.l.feed(cars(1, player_s1=30000), 30)
+        self.assertEqual(colour(self.l.look(30.1)), PURPLE)
+        self.assertIsNone(self.l.look(31.1))
+
+    def test_green_when_only_a_personal_best(self):
+        self.l.feed(cars(0, rival_sector=0), 0)
+        self.l.feed(cars(0, rival_sector=1, rival_s1=29000), 1)
+        self.l.feed(cars(1, player_s1=30000, rival_sector=1, rival_s1=29000), 30)
+        self.assertEqual(colour(self.l.look(30.1)), GREEN)
+
+    def test_yellow_when_slower_than_own_best_and_sector_3_from_lap_time(self):
+        self.l.feed(cars(0), 0)
+        self.l.feed(cars(1, player_s1=30000), 30)
+        self.l.feed(cars(2, player_s1=30000, player_s2=40000), 70)
+        self.l.feed(cars(0, last_ms=100000), 100)          # S3 = 30000
+        self.assertEqual(colour(self.l.look(100.1)), PURPLE)
+        self.l.feed(cars(1, player_s1=31000), 131)
+        self.assertEqual(colour(self.l.look(131.1)), YELLOW)
+
+    def test_out_laps_invalid_laps_and_races_dont_flash(self):
+        self.l.feed(cars(0, status=3), 0)
+        self.l.feed(cars(1, player_s1=30000, status=3), 30)
+        self.assertIsNone(self.l.look(30.1))
+        self.l.feed(cars(2, player_s1=30000, player_s2=40000, invalid=True), 70)
+        self.l.feed(cars(0, last_ms=100000), 100)
+        self.assertIsNone(self.l.look(100.1))
+        race = RaceLights()
+        race.feed({**cars(0), "session": {"session_type": 10}}, 0)
+        race.feed({**cars(1, player_s1=30000), "session": {"session_type": 10}}, 30)
+        self.assertIsNone(race.look(30.1))
 
 
 if __name__ == "__main__":

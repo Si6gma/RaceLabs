@@ -17,13 +17,15 @@ receiving.
 | Player sets fastest lap | Event `FTLP` with the player's index | Purple 2 s |
 | Personal best lap | Lap data: a valid lap faster than the previous best | Green 2 s |
 | Penalty or lap invalidated | Event `PENA` for the player, or `current_lap_invalid` rising | Short red double pulse |
+| Sector done (not in races) | Every car's `sector` changing in lap data | Purple 1 s if fastest of anyone so far, green if a personal best, yellow if slower. Out laps, in laps and invalid laps don't count |
+| In the garage | Lap data `is_in_garage` | RaceLabs orange `#FF7700` at 30% while in |
 | In the pit lane | Lap data `pit_status > 0` | Soft white while in |
 | Chequered flag | Event `CHQF` | White, alternating left/right, 3 times |
 | Session over | Event `SEND`, or no packets for 30 s | Lamps restored to how they were before the session |
 
 When several apply at once the highest wins:
 red flag > start lights > lights out > chequered > safety car > VSC > yellow >
-penalty > fastest lap > personal best > pit. When none apply, the lamps show
+penalty > fastest lap > personal best > sector > garage > pit. When none apply, the lamps show
 the room lighting saved at session start.
 
 ## Pieces

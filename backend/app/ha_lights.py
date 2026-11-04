@@ -29,6 +29,11 @@ def _request(req: urllib.request.Request):
         return json.load(resp)
 
 
+def _log_if_failed(task: "asyncio.Task"):
+    if not task.cancelled() and task.exception():
+        logger.error(f"Race lights test died: {task.exception()!r}")
+
+
 class HALights:
     def __init__(self, url: str, token: str, left: str, right: str, state_file: str = ""):
         self.url = url.rstrip("/")
@@ -48,6 +53,7 @@ class HALights:
         self._resend_at: Optional[float] = None
         self._failing = False
         self._demo: Optional[asyncio.Task] = None
+        self._checked_leftovers = False
 
     def on_frame(self, frame: Dict[str, Any]):
         now = time.monotonic()
@@ -60,6 +66,8 @@ class HALights:
     def configure(self, enabled: Optional[bool] = None, brightness: Optional[int] = None):
         if enabled is not None:
             self.enabled = enabled
+            if not enabled and self.demo_running:
+                self._demo.cancel()
         if brightness is not None:
             self.brightness = min(100, max(1, brightness))
             self._sent = None  # whatever is showing gets sent again at the new level
@@ -83,23 +91,26 @@ class HALights:
         if self._last_packet and time.monotonic() - self._last_packet < 2.0:
             return "the game is sending telemetry"
         self._demo = asyncio.create_task(self._run_demo())
+        self._demo.add_done_callback(_log_if_failed)
         return None
 
     async def _run_demo(self):
         from app.lights_demo import STEPS
         keepalive: Optional[Dict[str, Any]] = None
-        for seconds, frames in STEPS:
-            for frame in frames:
-                self.on_frame(frame)
-                if "lap" in frame:
-                    keepalive = frame
-            for _ in range(max(1, round(seconds / 0.5))):
-                await self._pause(0.5)
-                if keepalive:
-                    self.on_frame(keepalive)
-        # Over: let the next tick end the session and restore the room.
-        self.lights.reset()
-        self._last_packet = time.monotonic() - IDLE_SECONDS
+        try:
+            for seconds, frames in STEPS:
+                for frame in frames:
+                    self.on_frame(frame)
+                    if "lap" in frame:
+                        keepalive = frame
+                for _ in range(max(1, round(seconds / 0.5))):
+                    await self._pause(0.5)
+                    if keepalive:
+                        self.on_frame(keepalive)
+        finally:
+            # Over, or cancelled: let the next tick end the session and restore the room.
+            self.lights.reset()
+            self._last_packet = time.monotonic() - IDLE_SECONDS
 
     def _load(self):
         if not self._state_file or not os.path.exists(self._state_file):
@@ -122,37 +133,30 @@ class HALights:
 
     async def _tick(self):
         now = time.monotonic()
+        if not self._checked_leftovers:
+            self._checked_leftovers = True
+            if await self._scene_exists():
+                # A previous process (killed by a reload, say) died with the
+                # lamps mid-effect. Put the room back now, whatever else is going
+                # on, rather than snapshotting that effect as "before" later.
+                logger.info("Race lights: restoring the lamp snapshot a previous run left behind")
+                self._touched = True
+                await self._end_session(now)
+                return
+
         if not self._in_session:
             if self.enabled and self._last_packet and now - self._last_packet < IDLE_SECONDS:
                 self._in_session = True
-                if await self._scene_exists():
-                    # Left by a previous process that died mid-session (a code
-                    # reload, say), so the lamps may be showing an effect right
-                    # now. Keep that snapshot and let the first quiet moment
-                    # restore it, rather than snapshotting the effect as "before".
-                    logger.info("Race lights: reusing the lamp snapshot from a previous run")
-                    self._touched = True
-                else:
-                    # Save the room's lighting before anything changes it.
-                    await self._call("scene", "create", {
-                        "scene_id": SNAPSHOT_SCENE,
-                        "snapshot_entities": list(self.entities),
-                    })
+                # Save the room's lighting before anything changes it.
+                await self._call("scene", "create", {
+                    "scene_id": SNAPSHOT_SCENE,
+                    "snapshot_entities": list(self.entities),
+                })
             return
 
         # Switched off mid-session counts as the session ending: room lighting back.
         if not self.enabled or now - self._last_packet >= IDLE_SECONDS:
-            await self._restore(now)
-            if self._resend_at is not None:
-                # The restore's repeat has to happen before the snapshot goes.
-                await self._pause(RESEND_SECONDS)
-                self._resend_at = None
-                for entity in self.entities:
-                    await self._resend_state(entity)
-            await self._call("scene", "delete", {"entity_id": f"scene.{SNAPSHOT_SCENE}"})
-            self.lights.reset()
-            self._in_session = False
-            self._last_packet = 0.0
+            await self._end_session(now)
             return
 
         look = self.lights.look(now)
@@ -160,6 +164,19 @@ class HALights:
             await self._restore(now)
             return
         await self._show(look, now)
+
+    async def _end_session(self, now: float):
+        await self._restore(now)
+        if self._resend_at is not None:
+            # The restore's repeat has to happen before the snapshot goes.
+            await self._pause(RESEND_SECONDS)
+            self._resend_at = None
+            for entity in self.entities:
+                await self._resend_state(entity)
+        await self._call("scene", "delete", {"entity_id": f"scene.{SNAPSHOT_SCENE}"})
+        self.lights.reset()
+        self._in_session = False
+        self._last_packet = 0.0
 
     def _resend_due(self, now: float) -> bool:
         if self._resend_at is not None and now >= self._resend_at:

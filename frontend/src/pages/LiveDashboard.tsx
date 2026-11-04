@@ -84,10 +84,10 @@ function LiveDashboard() {
           </div>
         </div>
 
-        {/* Right: Timing (60%) + ERS (40%) */}
-        <div className="grid gap-px w-[196px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
+        {/* Right: Timing (the rest) + ERS (just its numbers) */}
+        <div className="grid gap-px w-[196px] shrink-0" style={{ gridTemplateRows: '1fr auto' }}>
           <div className="min-h-0"><TimingTower /></div>
-          <div className="min-h-0"><ERSSuite /></div>
+          <div><ERSSuite /></div>
         </div>
       </div>
 

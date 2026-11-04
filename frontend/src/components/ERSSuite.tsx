@@ -10,40 +10,11 @@ const ERS_MODES: Record<number, { label: string; color: string }> = {
   3: { label: 'OVERTAKE', color: '#FF2044' },
 };
 
-// Segmented bar — looks like an LED bar graph
-function SegBar({
-  value, max, color, segments = 12,
-}: { value: number; max: number; color: string; segments?: number }) {
-  const filled = Math.ceil((value / max) * segments);
+function Stat({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="flex gap-px">
-      {Array.from({ length: segments }).map((_, i) => (
-        <div
-          key={i}
-          className="flex-1 transition-colors duration-150"
-          style={{
-            height: '4px',
-            backgroundColor: i < filled ? color : '#1A2840',
-            boxShadow: i < filled && i === filled - 1 ? `0 0 5px ${color}88` : 'none',
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function ErsRow({ label, pct, value, max, color }: {
-  label: string; pct: number; value: number; max: number; color: string;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between">
-        <span className="eng-label">{label}</span>
-        <span className="font-telemetry text-[10px] tabular-nums" style={{ color }}>
-          {pct.toFixed(0)}%
-        </span>
-      </div>
-      <SegBar value={value} max={max} color={color} />
+    <div>
+      <span className="eng-label block">{label}</span>
+      <span className="font-telemetry text-[11px] tabular-nums" style={{ color }}>{value}</span>
     </div>
   );
 }
@@ -69,7 +40,7 @@ function ERSSuite() {
   const storeColor = storePct < 20 ? '#FF2044' : storePct < 50 ? '#FFD000' : '#00D4FF';
 
   return (
-    <div className="telemetry-panel flex flex-col h-full overflow-hidden">
+    <div className="telemetry-panel flex flex-col overflow-hidden">
       <div className="panel-header justify-between">
         <span className="eng-label font-bold">ERS</span>
         <span
@@ -84,53 +55,17 @@ function ERSSuite() {
         </span>
       </div>
 
-      <div className="flex-1 min-h-0 p-2.5 flex flex-col gap-2.5 overflow-hidden">
-        <ErsRow
-          label="STORE"
-          pct={storePct}
-          value={storeJ}
-          max={ERS_MAX_J}
-          color={storeColor}
+      <div className="px-2.5 py-2 grid grid-cols-3 gap-x-1 gap-y-1.5">
+        <Stat label="STORE"    value={`${storePct.toFixed(0)}%`}    color={storeColor} />
+        <Stat label="DEPLOYED" value={`${deployedPct.toFixed(0)}%`} color="#FF2044" />
+        <Stat label="HARVEST"  value={`${harvestPct.toFixed(0)}%`}  color="#1166FF" />
+        <Stat
+          label="EFF"
+          value={efficiency != null ? `${efficiency.toFixed(0)}%` : '--'}
+          color={efficiency != null ? (efficiency > 70 ? '#00E85A' : '#FFD000') : '#4A6078'}
         />
-        <ErsRow
-          label="DEPLOYED"
-          pct={deployedPct}
-          value={deployedJ}
-          max={ERS_MAX_J}
-          color="#FF2044"
-        />
-        <ErsRow
-          label="HARVESTED"
-          pct={harvestPct}
-          value={totalHarvestJ}
-          max={ERS_MAX_J}
-          color="#1166FF"
-        />
-
-        {/* Stats row */}
-        <div className="mt-auto pt-2 border-t border-motorsport-border/40 grid grid-cols-3 gap-1">
-          <div>
-            <span className="eng-label block">EFF</span>
-            <span
-              className="font-telemetry text-[11px] tabular-nums"
-              style={{ color: efficiency != null ? (efficiency > 70 ? '#00E85A' : '#FFD000') : '#4A6078' }}
-            >
-              {efficiency != null ? `${efficiency.toFixed(0)}%` : '--'}
-            </span>
-          </div>
-          <div>
-            <span className="eng-label block">MGUK</span>
-            <span className="font-telemetry text-[11px] tabular-nums text-motorsport-cyan">
-              {(harvestedMguk / 1000).toFixed(0)}kJ
-            </span>
-          </div>
-          <div>
-            <span className="eng-label block">MGUH</span>
-            <span className="font-telemetry text-[11px] tabular-nums text-motorsport-cyan">
-              {(harvestedMguh / 1000).toFixed(0)}kJ
-            </span>
-          </div>
-        </div>
+        <Stat label="MGUK" value={`${(harvestedMguk / 1000).toFixed(0)}kJ`} color="#00D4FF" />
+        <Stat label="MGUH" value={`${(harvestedMguh / 1000).toFixed(0)}kJ`} color="#00D4FF" />
       </div>
     </div>
   );

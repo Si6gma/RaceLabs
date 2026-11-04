@@ -42,12 +42,11 @@ class HALights:
         self._failing = False
 
     def on_frame(self, frame: Dict[str, Any]):
-        # A restart sends a couple of seconds of SEND. Only the first may end the
-        # session; the rest must not start a new one and snapshot the lamps mid-change.
-        if not self._in_session and frame.get("event", {}).get("code") == "SEND":
-            return
         now = time.monotonic()
-        self._last_packet = now
+        # Menus keep sending the odd event packet (button presses), so only real
+        # telemetry counts as the game being in a session.
+        if "event" not in frame:
+            self._last_packet = now
         self.lights.feed(frame, now)
 
     async def run(self):
@@ -70,7 +69,7 @@ class HALights:
                 })
             return
 
-        if self.lights.ended or now - self._last_packet >= IDLE_SECONDS:
+        if now - self._last_packet >= IDLE_SECONDS:
             await self._restore(now)
             self.lights.reset()
             self._in_session = False

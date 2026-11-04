@@ -156,11 +156,13 @@ class RaceLightsTest(unittest.TestCase):
         self.l.feed(ev("LGOT"), 301)
         self.assertEqual(colour(self.l.look(301.1)), GREEN)
 
-    def test_session_end(self):
+    def test_session_end_shows_the_garage_until_driving_again(self):
         self.l.feed({"session": {"safety_car_status": 1}}, 0)
         self.l.feed(ev("SEND"), 1)
-        self.assertTrue(self.l.ended)
-        self.assertIsNone(self.l.look(1))
+        self.assertEqual(self.l.look(1.1), ((*RACELABS_ORANGE, 30), (*RACELABS_ORANGE, 30)))
+        self.l.feed(ev("SSTA"), 8)
+        self.l.feed(lap(1), 8)
+        self.assertIsNone(self.l.look(8.1))
 
 
     def test_garage_glows_orange_at_30(self):

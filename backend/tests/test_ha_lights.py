@@ -50,16 +50,20 @@ class ResendTest(unittest.TestCase):
         self.assertEqual(self.tick(1001.5), [("light", "turn_off", "light.left"), ("light", "turn_off", "light.right")])
         self.assertEqual(self.tick(1003.0), [])
 
-    def test_a_burst_of_session_ends_does_not_start_new_sessions(self):
-        self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": True}})
+    def test_menus_glow_then_restore_once_telemetry_stops(self):
+        self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": False}})
         self.tick(1000.0)
-        self.tick(1000.2)
-        self.ha.on_frame({"event": {"code": "SEND"}})
-        self.assertEqual(self.tick(1000.4), [("scene", "turn_on", "scene.racelabs_before")])
-        for at in (1000.5, 1000.7, 1000.9):
-            self.ha.on_frame({"event": {"code": "SEND"}})
-            calls = self.tick(at)
-            self.assertNotIn("create", [c[1] for c in calls])
+        self.ha.on_frame({"player_car_index": 0, "event": {"code": "SEND"}})
+        self.assertEqual(self.tick(1000.2), [("light", "turn_on", ["light.left", "light.right"])])
+        # Button presses in the menus are events, so they don't keep the session alive.
+        self.now = 1020.0
+        self.ha.on_frame({"player_car_index": 0, "event": {"code": "BUTN"}})
+        self.assertEqual(self.tick(1030.1), [("scene", "turn_on", "scene.racelabs_before")])
+        self.assertFalse(self.ha._in_session)
+
+    def test_event_packets_alone_do_not_start_a_session(self):
+        self.ha.on_frame({"player_car_index": 0, "event": {"code": "BUTN"}})
+        self.assertEqual(self.tick(1000.0), [])
         self.assertFalse(self.ha._in_session)
 
 

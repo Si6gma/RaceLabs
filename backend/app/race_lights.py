@@ -79,7 +79,6 @@ class RaceLights:
     def reset(self):
         # name -> time it started. Flashes are dropped once their pattern has run.
         self._active: Dict[str, float] = {}
-        self.ended = False
         self._best_lap_ms: Optional[int] = None
         self._last_lap_ms = 0
         self._lap_num = 0
@@ -212,8 +211,11 @@ class RaceLights:
         elif code == "SSTA":
             self._active.clear()
         elif code == "SEND":
+            # The game sends nothing between a session ending and the next one
+            # starting (a one-shot restart sits on the garage screen), so treat
+            # that gap as the garage until lap data says otherwise.
             self._active.clear()
-            self.ended = True
+            self._hold("garage", True, now)
 
     def look(self, now: float) -> Optional[Look]:
         """The two lamp states to show now, or None for the room's own lighting."""

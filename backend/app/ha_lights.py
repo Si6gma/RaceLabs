@@ -17,12 +17,15 @@ logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 0.2
 IDLE_SECONDS = 30.0
+# Govee's LAN control is fire-and-forget UDP, so a lost packet leaves a lamp
+# showing the wrong thing. Every change is sent once more after this long.
+RESEND_SECONDS = 1.0
 SNAPSHOT_SCENE = "racelabs_before"
 
 
-def _post(req: urllib.request.Request):
-    with urllib.request.urlopen(req, timeout=2):
-        pass
+def _request(req: urllib.request.Request):
+    with urllib.request.urlopen(req, timeout=2) as resp:
+        return json.load(resp)
 
 
 class HALights:
@@ -35,9 +38,14 @@ class HALights:
         self._in_session = False
         self._sent: Optional[Look] = None
         self._touched = False
+        self._resend_at: Optional[float] = None
         self._failing = False
 
     def on_frame(self, frame: Dict[str, Any]):
+        # A restart sends a couple of seconds of SEND. Only the first may end the
+        # session; the rest must not start a new one and snapshot the lamps mid-change.
+        if not self._in_session and frame.get("event", {}).get("code") == "SEND":
+            return
         now = time.monotonic()
         self._last_packet = now
         self.lights.feed(frame, now)
@@ -63,7 +71,7 @@ class HALights:
             return
 
         if self.lights.ended or now - self._last_packet >= IDLE_SECONDS:
-            await self._restore()
+            await self._restore(now)
             self.lights.reset()
             self._in_session = False
             self._last_packet = 0.0
@@ -71,20 +79,52 @@ class HALights:
 
         look = self.lights.look(now)
         if look is None:
-            await self._restore()
+            await self._restore(now)
             return
-        await self._show(look)
+        await self._show(look, now)
 
-    async def _restore(self):
+    def _resend_due(self, now: float) -> bool:
+        if self._resend_at is not None and now >= self._resend_at:
+            self._resend_at = None
+            return True
+        return False
+
+    async def _restore(self, now: float):
         if self._touched:
             await self._call("scene", "turn_on", {"entity_id": f"scene.{SNAPSHOT_SCENE}"})
             self._touched = False
+            self._resend_at = now + RESEND_SECONDS
+        elif self._resend_due(now):
+            # Home Assistant skips a scene it thinks is already applied, so
+            # repeat it as explicit commands from the state it holds.
+            for entity in self.entities:
+                await self._resend_state(entity)
         self._sent = None
 
-    async def _show(self, look: Look):
+    async def _resend_state(self, entity: str):
+        state = await self._call_get(f"/api/states/{entity}")
+        if not state:
+            return
+        if state.get("state") != "on":
+            await self._call("light", "turn_off", {"entity_id": entity})
+            return
+        attrs = state.get("attributes", {})
+        data: Dict[str, Any] = {"entity_id": entity}
+        if attrs.get("brightness") is not None:
+            data["brightness"] = attrs["brightness"]
+        if attrs.get("color_mode") == "color_temp" and attrs.get("color_temp_kelvin"):
+            data["color_temp_kelvin"] = attrs["color_temp_kelvin"]
+        elif attrs.get("rgb_color"):
+            data["rgb_color"] = attrs["rgb_color"]
+        await self._call("light", "turn_on", data)
+
+    async def _show(self, look: Look, now: float):
         sent = self._sent or (False, False)  # never equal to a real lamp state
         changed = [i for i in (0, 1) if look[i] != sent[i]]
-        if not changed:
+        resend = not changed and self._resend_due(now)
+        if resend:
+            changed = [0, 1]
+        elif not changed:
             return
         if len(changed) == 2 and look[0] == look[1]:
             await self._set_lamp(list(self.entities), look[0])
@@ -93,6 +133,8 @@ class HALights:
                 await self._set_lamp([self.entities[i]], look[i])
         self._sent = look
         self._touched = True
+        if not resend:
+            self._resend_at = now + RESEND_SECONDS
 
     async def _set_lamp(self, entity_ids, lamp: Lamp):
         if lamp is None:
@@ -110,12 +152,21 @@ class HALights:
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
             method="POST",
         )
+        await self._send(req, f"{domain}.{service}")
+
+    async def _call_get(self, path: str) -> Optional[Dict[str, Any]]:
+        req = urllib.request.Request(f"{self.url}{path}", headers={"Authorization": f"Bearer {self.token}"})
+        return await self._send(req, path)
+
+    async def _send(self, req: urllib.request.Request, what: str):
         try:
-            await asyncio.to_thread(_post, req)
+            result = await asyncio.to_thread(_request, req)
             if self._failing:
                 logger.info("Race lights: Home Assistant reachable again")
             self._failing = False
+            return result
         except Exception as e:
             if not self._failing:
-                logger.warning(f"Race lights: Home Assistant call {domain}.{service} failed: {e}")
+                logger.warning(f"Race lights: Home Assistant call {what} failed: {e}")
             self._failing = True
+            return None

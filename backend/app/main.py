@@ -16,6 +16,7 @@ from app.database import init_db, get_db
 from app.websocket import manager
 from app.telemetry import pipeline
 from app.udp_receiver import receiver
+from app.ha_lights import HALights
 from app.csv_import_service import CSVImportService
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,11 +39,20 @@ async def lifespan(app: FastAPI):
     await init_db()
     
     udp_task = asyncio.create_task(receiver.start(udp_handler))
+
+    lights_task = None
+    if settings.HA_URL and settings.HA_TOKEN:
+        lights = HALights(settings.HA_URL, settings.HA_TOKEN, settings.HA_LIGHT_LEFT, settings.HA_LIGHT_RIGHT)
+        pipeline.add_listener(lights.on_frame)
+        lights_task = asyncio.create_task(lights.run())
+        logger.info(f"Race lights on: {settings.HA_LIGHT_LEFT}, {settings.HA_LIGHT_RIGHT}")
     
     yield
     
     receiver.stop()
     udp_task.cancel()
+    if lights_task:
+        lights_task.cancel()
     try:
         await udp_task
     except asyncio.CancelledError:

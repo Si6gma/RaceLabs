@@ -25,6 +25,13 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/telemetry
       - UDP_PORT=20777
       - WS_PORT=8000
+      # Home Assistant runs on the host network. The token comes from .env.lights.
+      - HA_URL=http://host.docker.internal:8123
+    env_file:
+      - path: .env.lights
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - postgres
     networks:

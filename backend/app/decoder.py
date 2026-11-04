@@ -272,6 +272,7 @@ class TelemetryFrame:
     status: Optional[CarStatus] = None
     damage: Optional[CarDamage] = None
     session: Optional[SessionData] = None
+    event: Optional[Dict[str, Any]] = None
     all_lap_distances: List[float] = field(default_factory=list)
     car_team_ids: List[int] = field(default_factory=list)
     # Per-car arrays (all 22 slots) for spectating cars other than the player
@@ -352,6 +353,8 @@ class F1Decoder:
                 frame.damage = frame.damage_all[pc]
             elif packet_type == PacketType.SESSION:
                 frame.session = self._decode_session(data)
+            elif packet_type == PacketType.EVENT:
+                frame.event = self._decode_event(data)
 
             return frame
         except Exception as e:
@@ -472,7 +475,7 @@ class F1Decoder:
             d4 = struct.unpack_from('<B', data, offset + 22)    # 22   drsAllowed
             d5 = struct.unpack_from('<H', data, offset + 23)    # 23-24 drsActivationDistance
             d6 = struct.unpack_from('<3B', data, offset + 25)   # 25-27 actualTyreCompound,visualTyreCompound,tyresAgeLaps
-            # 28: vehicleFiaFlags (skip)
+            d10 = struct.unpack_from('<b', data, offset + 28)   # 28   vehicleFiaFlags
             # 29-36: enginePowerICE + enginePowerERS floats (skip)
             d7 = struct.unpack_from('<f', data, offset + 37)    # 37-40 ersStoreEnergy
             d8 = struct.unpack_from('<B', data, offset + 41)    # 41   ersDeployMode
@@ -494,6 +497,7 @@ class F1Decoder:
                 actual_tyre_compound=d6[0],
                 visual_tyre_compound=d6[1],
                 tyres_age_laps=d6[2],
+                vehicle_fia_flags=d10[0],
                 ers_store_energy=d7[0],
                 ers_deploy_mode=d8[0],
                 ers_harvested_this_lap_mguk=d9[0],
@@ -628,6 +632,24 @@ class F1Decoder:
         except Exception:
             return SessionData()
 
+    def _decode_event(self, data: bytes) -> Dict[str, Any]:
+        # 4-char code, then a union whose layout depends on the code. Only the
+        # fields something reads are decoded.
+        offset = self.HEADER_SIZE
+        try:
+            code = data[offset:offset + 4].decode('ascii')
+            event: Dict[str, Any] = {"code": code}
+            if code == 'FTLP':
+                event["vehicle_idx"], event["lap_time"] = struct.unpack_from('<Bf', data, offset + 4)
+            elif code == 'PENA':
+                d = struct.unpack_from('<3B', data, offset + 4)   # penaltyType, infringementType, vehicleIdx
+                event["penalty_type"], event["vehicle_idx"] = d[0], d[2]
+            elif code == 'STLG':
+                event["num_lights"] = data[offset + 4]
+            return event
+        except Exception:
+            return {}
+
     @staticmethod
     def _motion_dict(m: MotionData) -> Dict[str, Any]:
         return {
@@ -708,6 +730,7 @@ class F1Decoder:
             "tyres_wear": s.tyres_wear,
             "tyre_compound": s.visual_tyre_compound,
             "tyres_age_laps": s.tyres_age_laps,
+            "fia_flags": s.vehicle_fia_flags,
             "front_left_wing_damage": s.front_left_wing_damage,
             "front_right_wing_damage": s.front_right_wing_damage,
             "rear_wing_damage": s.rear_wing_damage,
@@ -771,6 +794,9 @@ class F1Decoder:
             result["damage"] = self._damage_dict(frame.damage)
         if frame.damage_all:
             result["damage_all"] = [self._damage_dict(d) for d in frame.damage_all]
+
+        if frame.event:
+            result["event"] = frame.event
 
         if frame.all_lap_distances:
             result["all_lap_distances"] = frame.all_lap_distances

@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     WS_PORT: int = 8000
     APP_NAME: str = "Telemetry Suite"
     DEBUG: bool = True
+    # Room lamps through Home Assistant. Off unless both URL and token are set.
+    HA_URL: str = ""
+    HA_TOKEN: str = ""
+    HA_LIGHT_LEFT: str = "light.left"
+    HA_LIGHT_RIGHT: str = "light.right"
 
     class Config:
         env_file = ".env"

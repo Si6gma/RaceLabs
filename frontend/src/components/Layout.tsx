@@ -12,7 +12,16 @@ const navItems = [
 
 type GameStatus = 'offline' | 'no_game' | 'garage' | 'on_track';
 
-function GameStatusIndicator({ sessionLabel }: { sessionLabel: string | null }) {
+// The circuit box doubles as the status light, like the DRS and ERS boxes:
+// solid green on track, orange in the garage, dashed grey with no signal.
+const STATUS_STYLE: Record<GameStatus, { border: string; color: string; dashed: boolean; label: string }> = {
+  on_track: { border: '#00E85A', color: '#00E85A', dashed: false, label: 'Live' },
+  garage:   { border: '#FF7A1A', color: '#FF7A1A', dashed: false, label: 'Garage' },
+  no_game:  { border: '#2A3745', color: '#9AACBE', dashed: true,  label: 'No signal' },
+  offline:  { border: '#2A3745', color: '#5F7183', dashed: true,  label: 'Offline' },
+};
+
+function SessionStatusBox({ track, sessionType }: { track?: string; sessionType?: string }) {
   const connected     = useTelemetryStore(s => s.connected);
   const lastFrameTime = useTelemetryStore(s => s.lastFrameTime);
   const driverStatus  = useTelemetryStore(s => s.currentFrame?.lap?.driver_status);
@@ -30,22 +39,29 @@ function GameStatusIndicator({ sessionLabel }: { sessionLabel: string | null }) 
     return 'on_track';
   }, [connected, lastFrameTime, now, driverStatus]);
 
-  const cfg = {
-    offline:  { dot: 'bg-motorsport-dim',                      text: 'text-motorsport-dim',    label: 'OFFLINE'              },
-    no_game:  { dot: 'bg-motorsport-dim',                      text: 'text-motorsport-muted',  label: 'NO SIGNAL'            },
-    garage:   { dot: 'bg-motorsport-orange',                   text: 'text-motorsport-orange', label: 'GARAGE'               },
-    on_track: { dot: 'bg-motorsport-green animate-pulse',      text: 'text-motorsport-green',  label: sessionLabel || 'LIVE' },
-  }[gameStatus];
+  const s = STATUS_STYLE[gameStatus];
 
   return (
-    <div className="flex items-center justify-end gap-2 w-[112px] shrink-0">
-      <span className={`w-[6px] h-[6px] shrink-0 ${cfg.dot}`} />
-      <span className={`text-[13px] font-bold tracking-wide uppercase truncate ${cfg.text}`}>{cfg.label}</span>
+    <div
+      className="flex items-center gap-3 h-7 px-3 border-2 transition-colors"
+      style={{ borderColor: s.border, borderStyle: s.dashed ? 'dashed' : 'solid', backgroundColor: s.dashed ? 'transparent' : `${s.border}1F` }}
+    >
+      {track ? (
+        <>
+          <span className="text-[16px] font-bold tracking-wide text-motorsport-text leading-none">{track}</span>
+          {sessionType && (
+            <span className="text-[12px] font-bold tracking-wide uppercase text-motorsport-muted leading-none">{sessionType}</span>
+          )}
+        </>
+      ) : null}
+      <span className="text-[12px] font-bold tracking-wide uppercase leading-none" style={{ color: s.color }}>
+        {s.label}
+      </span>
     </div>
   );
 }
 
-const GameStatusIndicatorMemo = memo(GameStatusIndicator);
+const SessionStatusBoxMemo = memo(SessionStatusBox);
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const session    = useTelemetryStore(s => s.session);
@@ -66,7 +82,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     } catch {}
   }
 
-  const sessionLabel = useMemo(() => session?.session_type || 'LIVE', [session]);
 
   return (
     <div className="h-screen flex flex-col bg-motorsport-black overflow-hidden">
@@ -79,22 +94,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <span className="text-[12px] font-medium tracking-[0.1em] text-motorsport-muted uppercase">SUITE</span>
         </div>
 
-        {/* Where we are: circuit name carries the header, session type sits beside it */}
-        {session && (
-          <div className="flex items-center h-full px-4 gap-3 border-r border-motorsport-border">
-            <span className="text-[20px] font-bold tracking-wide text-motorsport-text leading-none">
-              {session.track}
-            </span>
-            <span className="px-2 py-0.5 border border-motorsport-border-strong text-[12px] font-bold tracking-wide uppercase text-motorsport-muted leading-none">
-              {session.session_type}
-            </span>
-            {session.best_lap_time && (
-              <span className="font-telemetry text-[14px] tabular-nums text-motorsport-purple ml-1">
-                {formatBestLap(session.best_lap_time)}
-              </span>
-            )}
-          </div>
-        )}
+        {/* Where we are and whether the car is on track, in one box */}
+        <div className="flex items-center h-full px-4 border-r border-motorsport-border">
+          <SessionStatusBoxMemo track={session?.track} sessionType={session?.session_type} />
+        </div>
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-3 px-4 h-full border-l border-motorsport-border">
@@ -122,8 +125,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               </span>
             )}
           </button>
-
-          <GameStatusIndicatorMemo sessionLabel={sessionLabel} />
         </div>
       </header>
 
@@ -163,11 +164,4 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </div>
     </div>
   );
-}
-
-function formatBestLap(ms: number): string {
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-  const millis  = ms % 1000;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
 }

@@ -11,9 +11,16 @@ class FakeHA(HALights):
         super().__init__("http://ha", "token", "light.left", "light.right")
         self.calls = []
         self.states = {"light.left": {"state": "off"}, "light.right": {"state": "off"}}
+        self.scene_exists = False
 
     async def _call(self, domain, service, data):
         self.calls.append((domain, service, data.get("entity_id")))
+
+    async def _scene_exists(self):
+        return self.scene_exists
+
+    async def _pause(self, seconds):
+        pass
 
     async def _call_get(self, path):
         return self.states[path.rsplit("/", 1)[-1]]
@@ -58,8 +65,23 @@ class ResendTest(unittest.TestCase):
         # Button presses in the menus are events, so they don't keep the session alive.
         self.now = 1020.0
         self.ha.on_frame({"player_car_index": 0, "event": {"code": "BUTN"}})
-        self.assertEqual(self.tick(1030.1), [("scene", "turn_on", "scene.racelabs_before")])
+        # Restore, its repeat as explicit commands, then the snapshot is deleted.
+        self.assertEqual(self.tick(1030.1), [
+            ("scene", "turn_on", "scene.racelabs_before"),
+            ("light", "turn_off", "light.left"), ("light", "turn_off", "light.right"),
+            ("scene", "delete", "scene.racelabs_before"),
+        ])
         self.assertFalse(self.ha._in_session)
+
+    def test_a_snapshot_left_by_a_dead_process_is_reused_not_retaken(self):
+        # The lamps are mid-effect from the previous process; snapshotting them
+        # now would make that effect the "room lighting" forever.
+        self.ha.scene_exists = True
+        self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": False}})
+        self.assertEqual(self.tick(1000.0), [])
+        self.assertTrue(self.ha._in_session)
+        # Nothing active, so the old snapshot is restored straight away.
+        self.assertEqual(self.tick(1000.2), [("scene", "turn_on", "scene.racelabs_before")])
 
     def test_event_packets_alone_do_not_start_a_session(self):
         self.ha.on_frame({"player_car_index": 0, "event": {"code": "BUTN"}})

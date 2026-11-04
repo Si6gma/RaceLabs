@@ -61,16 +61,31 @@ class HALights:
         now = time.monotonic()
         if not self._in_session:
             if self._last_packet and now - self._last_packet < IDLE_SECONDS:
-                # Save the room's lighting before anything changes it.
                 self._in_session = True
-                await self._call("scene", "create", {
-                    "scene_id": SNAPSHOT_SCENE,
-                    "snapshot_entities": list(self.entities),
-                })
+                if await self._scene_exists():
+                    # Left by a previous process that died mid-session (a code
+                    # reload, say), so the lamps may be showing an effect right
+                    # now. Keep that snapshot and let the first quiet moment
+                    # restore it, rather than snapshotting the effect as "before".
+                    logger.info("Race lights: reusing the lamp snapshot from a previous run")
+                    self._touched = True
+                else:
+                    # Save the room's lighting before anything changes it.
+                    await self._call("scene", "create", {
+                        "scene_id": SNAPSHOT_SCENE,
+                        "snapshot_entities": list(self.entities),
+                    })
             return
 
         if now - self._last_packet >= IDLE_SECONDS:
             await self._restore(now)
+            if self._resend_at is not None:
+                # The restore's repeat has to happen before the snapshot goes.
+                await self._pause(RESEND_SECONDS)
+                self._resend_at = None
+                for entity in self.entities:
+                    await self._resend_state(entity)
+            await self._call("scene", "delete", {"entity_id": f"scene.{SNAPSHOT_SCENE}"})
             self.lights.reset()
             self._in_session = False
             self._last_packet = 0.0
@@ -152,6 +167,21 @@ class HALights:
             method="POST",
         )
         await self._send(req, f"{domain}.{service}")
+
+    async def _scene_exists(self) -> bool:
+        req = urllib.request.Request(
+            f"{self.url}/api/states/scene.{SNAPSHOT_SCENE}",
+            headers={"Authorization": f"Bearer {self.token}"},
+        )
+        try:
+            await asyncio.to_thread(_request, req)
+            return True
+        except Exception:
+            # 404 when there is none; anything else and the create below will say so.
+            return False
+
+    async def _pause(self, seconds: float):
+        await asyncio.sleep(seconds)
 
     async def _call_get(self, path: str) -> Optional[Dict[str, Any]]:
         req = urllib.request.Request(f"{self.url}{path}", headers={"Authorization": f"Bearer {self.token}"})

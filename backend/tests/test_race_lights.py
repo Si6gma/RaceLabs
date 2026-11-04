@@ -86,6 +86,10 @@ class RaceLightsTest(unittest.TestCase):
         left, right = self.l.look(0.1)
         self.assertEqual(left, (*RED, 25))
         self.assertIsNone(right)
+        self.assertEqual(self.l.look(0.6), (None, None))      # dark between beeps
+        self.l.feed(ev("STLG", num_lights=4), 0.8)
+        self.assertEqual(self.l.look(0.9), ((*RED, 80), (*RED, 80)))
+        self.assertEqual(self.l.look(1.3), (None, None))
         self.l.feed(ev("STLG", num_lights=5), 1)
         self.assertEqual(self.l.look(1.1), ((*RED, 100), (*RED, 100)))
         self.l.feed(ev("LGOT"), 2)

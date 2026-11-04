@@ -8,7 +8,7 @@ receiving.
 
 | Moment | Source in F1 23 telemetry | Lamps |
 |---|---|---|
-| Start lights 1-5 | Event `STLG`, `numLights` | Red builds: 1-2 left only, 3-5 both, brighter each light |
+| Start lights 1-5 | Event `STLG`, `numLights` | Each light beeps: a 0.4 s red blink, brighter each time, dark in between; 1-2 left only, 3-5 both; light 5 stays lit until lights out |
 | Lights out | Event `LGOT` | Green 1.5 s |
 | Red flag | Event `RDFL` | Solid red until the next start or session |
 | Safety car | Session `safety_car_status == 1` | Amber pulse while deployed |

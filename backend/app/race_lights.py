@@ -30,10 +30,12 @@ RACELABS_ORANGE = (255, 119, 0)  # #FF7700, the dashboard accent
 PATTERNS: Dict[str, Tuple[List[Tuple[float, Lamp, Lamp]], bool]] = {
     "red_flag": ([(1.0, _c(RED, 100), _c(RED, 100))], True),
     # Start lights are flashes rather than holds so an aborted start clears itself.
-    "start_1": ([(10.0, _c(RED, 25), OFF)], False),
-    "start_2": ([(10.0, _c(RED, 50), OFF)], False),
-    "start_3": ([(10.0, _c(RED, 60), _c(RED, 60))], False),
-    "start_4": ([(10.0, _c(RED, 80), _c(RED, 80))], False),
+    # Each light beeps (a blink, brighter each time) and goes dark until the next;
+    # the fifth stays lit until lights out, like the gantry.
+    "start_1": ([(0.4, _c(RED, 25), OFF), (9.6, OFF, OFF)], False),
+    "start_2": ([(0.4, _c(RED, 50), OFF), (9.6, OFF, OFF)], False),
+    "start_3": ([(0.4, _c(RED, 60), _c(RED, 60)), (9.6, OFF, OFF)], False),
+    "start_4": ([(0.4, _c(RED, 80), _c(RED, 80)), (9.6, OFF, OFF)], False),
     "start_5": ([(10.0, _c(RED, 100), _c(RED, 100))], False),
     "lights_out": ([(1.5, _c(GREEN, 100), _c(GREEN, 100))], False),
     "chequered": ([(0.5, _c(WHITE, 100), OFF), (0.5, OFF, _c(WHITE, 100))] * 3, False),

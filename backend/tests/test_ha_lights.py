@@ -22,7 +22,7 @@ class FakeHA(HALights):
         return self.scene_exists
 
     async def _pause(self, seconds):
-        pass
+        await asyncio.sleep(0)   # yield, so a cancel can land
 
     async def _call_get(self, path):
         return self.states[path.rsplit("/", 1)[-1]]
@@ -75,15 +75,21 @@ class ResendTest(unittest.TestCase):
         ])
         self.assertFalse(self.ha._in_session)
 
-    def test_a_snapshot_left_by_a_dead_process_is_reused_not_retaken(self):
-        # The lamps are mid-effect from the previous process; snapshotting them
-        # now would make that effect the "room lighting" forever.
+    def test_a_snapshot_left_by_a_dead_process_is_restored_at_startup(self):
+        # The lamps may be mid-effect from the previous process. Put the room
+        # back on the very first tick, telemetry or not, lights on or off.
         self.ha.scene_exists = True
+        self.ha.configure(enabled=False)
+        self.assertEqual(self.tick(1000.0), [
+            ("scene", "turn_on", "scene.racelabs_before"),
+            ("light", "turn_off", "light.left"), ("light", "turn_off", "light.right"),
+            ("scene", "delete", "scene.racelabs_before"),
+        ])
+        # Later sessions take a fresh snapshot as usual.
+        self.ha.scene_exists = False
+        self.ha.configure(enabled=True)
         self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": False}})
-        self.assertEqual(self.tick(1000.0), [])
-        self.assertTrue(self.ha._in_session)
-        # Nothing active, so the old snapshot is restored straight away.
-        self.assertEqual(self.tick(1000.2), [("scene", "turn_on", "scene.racelabs_before")])
+        self.assertEqual(self.tick(1000.2)[0][:2], ("scene", "create"))
 
     def test_event_packets_alone_do_not_start_a_session(self):
         self.ha.on_frame({"player_car_index": 0, "event": {"code": "BUTN"}})
@@ -157,6 +163,16 @@ class ControlTest(unittest.TestCase):
 
     async def async_start(self):
         return self.ha.start_demo()
+
+    def test_switching_off_cancels_a_running_test(self):
+        async def go():
+            self.assertIsNone(self.ha.start_demo())
+            await asyncio.sleep(0)
+            self.assertTrue(self.ha.demo_running)
+            self.ha.configure(enabled=False)
+            await asyncio.sleep(0)
+            return self.ha.demo_running
+        self.assertFalse(asyncio.run(go()))
 
     def test_settings_survive_a_restart(self):
         import os, tempfile

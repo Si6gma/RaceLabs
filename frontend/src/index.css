@@ -31,7 +31,7 @@
 
   /* Panel section header — left orange accent bar */
   .panel-header {
-    @apply px-2.5 py-1.5 border-b border-motorsport-border flex items-center gap-2 shrink-0;
+    @apply px-3 h-8 border-b border-motorsport-border flex items-center gap-2 shrink-0;
     border-left: 2px solid theme('colors.motorsport.orange');
   }
 
@@ -41,8 +41,8 @@
 
   /* ── Typography ── */
   .eng-label {
-    @apply text-[10px] text-motorsport-muted uppercase tracking-wider font-semibold;
-    letter-spacing: 0.08em;
+    @apply text-[12px] text-motorsport-muted uppercase font-semibold leading-none;
+    letter-spacing: 0.06em;
   }
 
   .telemetry-value {
@@ -52,7 +52,7 @@
   /* ── Bars ── */
   .eng-bar-track {
     @apply overflow-hidden bg-motorsport-dark;
-    height: 3px;
+    height: 5px;
   }
   .eng-bar-fill {
     @apply h-full transition-[width] duration-75 ease-linear;
@@ -60,8 +60,8 @@
 
   /* ── Chips ── */
   .eng-chip {
-    @apply inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold
-           border font-telemetry tracking-wider uppercase;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[12px] font-bold
+           border font-telemetry tracking-wide uppercase;
   }
 
   /* ── Badges ── */

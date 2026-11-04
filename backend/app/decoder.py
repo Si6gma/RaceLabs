@@ -746,6 +746,7 @@ class F1Decoder:
             "ers_harvested_this_lap_mguk": round(s.ers_harvested_this_lap_mguk, 2),
             "ers_harvested_this_lap_mguh": round(s.ers_harvested_this_lap_mguh, 2),
             "ers_deployed_this_lap": round(s.ers_deployed_this_lap, 2),
+            "max_rpm": s.max_rpm,
         }
 
     @staticmethod

@@ -3,12 +3,13 @@ import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatTime } from '@/utils/formatters';
 import { GapTracker, RACE_SESSION_TYPES, type Gap } from '@/utils/raceGaps';
 import { SectorTracker, type SectorColour } from '@/utils/sectorTimes';
+import CarSelector from '@/components/CarSelector';
 
 const SECTOR_COLOURS: Record<SectorColour, string> = {
   purple: '#8855FF',
   green:  '#00E85A',
   yellow: '#FFD000',
-  none:   '#7A8EA3',
+  none:   '#9AACBE',
 };
 
 function deltaColor(ms: number): string {
@@ -29,8 +30,8 @@ function isGood(changeMs: number | null, behind: boolean): boolean | null {
 function Rate({ label, changeMs, behind }: { label: string; changeMs: number | null; behind: boolean }) {
   const good = isGood(changeMs, behind);
   return (
-    <span className="font-telemetry text-[10px] tabular-nums" style={{ color: good == null ? '#4A6078' : good ? GOOD : BAD }}>
-      <span className="text-motorsport-dim">{label} </span>
+    <span className="font-telemetry text-[13px] tabular-nums leading-none" style={{ color: good == null ? '#5F7183' : good ? GOOD : BAD }}>
+      <span className="text-motorsport-muted">{label} </span>
       {changeMs == null ? '--' : `${good ? '+' : '−'}${(Math.abs(changeMs) / 1000).toFixed(2)}/lap`}
     </span>
   );
@@ -39,21 +40,21 @@ function Rate({ label, changeMs, behind }: { label: string; changeMs: number | n
 function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; name: string; behind: boolean }) {
   const good = isGood(gap?.trendMs ?? gap?.nowMs ?? null, behind);
   return (
-    <div className="flex flex-col gap-0.5">
-      <div className="flex items-center justify-between gap-2">
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-2">
         <span className="eng-label">{label}</span>
-        <span className="font-telemetry text-[10px] text-motorsport-muted truncate">{gap ? name : '—'}</span>
+        <span className="text-[14px] font-semibold tracking-wide text-motorsport-text truncate">{gap ? name : '—'}</span>
       </div>
       <span
-        className="font-telemetry text-[17px] font-bold tabular-nums leading-none"
-        style={{ color: good == null ? '#B8C8D6' : good ? GOOD : BAD }}
+        className="font-telemetry text-[28px] font-bold tabular-nums leading-none"
+        style={{ color: good == null ? '#E8EEF4' : good ? GOOD : BAD }}
       >
         {gap ? `${(gap.gapMs / 1000).toFixed(3)}s` : '--.---'}
       </span>
       {/* NOW: the gap's derivative over the last ~300 m. LAP: vs this spot last lap. */}
       <div className="flex items-baseline justify-between">
-        <Rate label="NOW" changeMs={gap?.nowMs ?? null} behind={behind} />
-        <Rate label="LAP" changeMs={gap?.trendMs ?? null} behind={behind} />
+        <Rate label="Now" changeMs={gap?.nowMs ?? null} behind={behind} />
+        <Rate label="Lap" changeMs={gap?.trendMs ?? null} behind={behind} />
       </div>
     </div>
   );
@@ -88,7 +89,11 @@ function TimingTower() {
   const lapNum    = l?.current_lap_num ?? 0;
   const totalLaps = session?.total_laps ?? 0;
   const currentMs = l?.current_lap_time_ms ?? 0;
-  const bestMs    = session?.best_lap_time ?? null;
+  // The backend only knows a best lap once it is recording, so prefer what the
+  // tracker has seen the viewed car set this session.
+  // Until a lap completes on screen, the last lap time is the best we know.
+  const lastLapMs = l?.last_lap_time_ms ?? 0;
+  const bestMs    = sectors.current.tracker.bestLapFor(viewedIdx) ?? session?.best_lap_time ?? (lastLapMs > 0 ? lastLapMs : null);
   const invalid   = l?.current_lap_invalid ?? false;
   const pitStatus = l?.pit_status ?? 0;
   const deltaMs   = bestMs && currentMs > 0 ? currentMs - bestMs : null;
@@ -97,33 +102,35 @@ function TimingTower() {
 
   return (
     <div className="telemetry-panel flex flex-col h-full overflow-hidden">
-      <div className="panel-header justify-between">
-        <span className="eng-label font-bold">Timing</span>
-        {pitStatus > 0 && (
-          <span className="eng-chip bg-motorsport-yellow/15 text-motorsport-yellow border-motorsport-yellow/30">
-            PIT LANE
-          </span>
-        )}
-      </div>
+      <CarSelector />
 
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden divide-y divide-motorsport-border/50">
-        {/* Position + Lap */}
-        <div className="px-2.5 pt-2 pb-2 flex items-end justify-between shrink-0">
-          <div>
-            <span className="eng-label block mb-0.5">POSITION</span>
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden divide-y divide-motorsport-border">
+        {/* P10 on the left; the running lap time over the lap count on the right */}
+        <div className="px-3 py-3 flex items-end justify-between shrink-0">
+          <div className="flex items-end gap-2">
             <span
-              className="font-telemetry font-black leading-none tabular-nums"
-              style={{ fontSize: '3.4rem', color: position === 1 ? '#00E85A' : position <= 3 ? '#FFD000' : '#B8C8D6' }}
+              className="font-telemetry font-bold leading-none tabular-nums text-motorsport-text"
+              style={{ fontSize: '56px' }}
             >
               P{position || '--'}
             </span>
+            {pitStatus > 0 && (
+              <span className="eng-chip mb-1 bg-motorsport-yellow/15 text-motorsport-yellow border-motorsport-yellow/30">Pit</span>
+            )}
           </div>
-          <div className="text-right">
-            <span className="eng-label block mb-0.5">LAP</span>
-            <span className="font-telemetry text-2xl font-bold tabular-nums text-motorsport-text">
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2">
+              {invalid && (
+                <span className="eng-chip bg-motorsport-red/15 text-motorsport-red border-motorsport-red/30">Invalid</span>
+              )}
+              <span className={`font-telemetry text-[22px] font-semibold tabular-nums leading-none ${invalid ? 'text-motorsport-red' : 'text-motorsport-text'}`}>
+                {formatTime(currentMs)}
+              </span>
+            </div>
+            <span className="font-telemetry text-[28px] font-bold tabular-nums leading-none text-motorsport-text">
               {lapNum || '--'}
               {totalLaps > 0 && (
-                <span className="text-base text-motorsport-muted font-normal">/{totalLaps}</span>
+                <span className="text-[18px] text-motorsport-muted font-normal">/{totalLaps}</span>
               )}
             </span>
           </div>
@@ -131,18 +138,18 @@ function TimingTower() {
 
         {/* Races: gaps to the cars either side. Otherwise: delta vs best. */}
         {isRace ? (
-        <div className="px-2.5 py-2 bg-motorsport-dark/50 shrink-0 flex flex-col gap-2">
-          <GapRow label="AHEAD" gap={gaps.ahead} name={gaps.ahead ? nameOf(gaps.ahead.carIndex) : ''} behind={false} />
-          <GapRow label="BEHIND" gap={gaps.behind} name={gaps.behind ? nameOf(gaps.behind.carIndex) : ''} behind />
+        <div className="px-3 py-3 bg-motorsport-dark shrink-0 flex flex-col gap-4">
+          <GapRow label="Ahead" gap={gaps.ahead} name={gaps.ahead ? nameOf(gaps.ahead.carIndex) : ''} behind={false} />
+          <GapRow label="Behind" gap={gaps.behind} name={gaps.behind ? nameOf(gaps.behind.carIndex) : ''} behind />
         </div>
         ) : (
-        <div className="px-2.5 py-2 bg-motorsport-dark/50 shrink-0">
-          <span className="eng-label block mb-1">DELTA VS BEST</span>
+        <div className="px-3 py-3 bg-motorsport-dark shrink-0 flex flex-col gap-1.5">
+          <span className="eng-label">Delta to best</span>
           <span
             className="font-telemetry font-bold tabular-nums leading-none"
             style={{
-              fontSize: '1.9rem',
-              color: deltaMs == null ? '#4A6078' : deltaColor(deltaMs),
+              fontSize: '36px',
+              color: deltaMs == null ? '#5F7183' : deltaColor(deltaMs),
             }}
           >
             {deltaMs == null
@@ -152,30 +159,17 @@ function TimingTower() {
         </div>
         )}
 
-        {/* Current lap */}
-        <div className="px-2.5 py-1.5 flex items-center justify-between shrink-0">
-          <span className="eng-label">CURRENT LAP</span>
-          <div className="flex items-center gap-1.5">
-            <span className={`font-telemetry text-[15px] font-semibold tabular-nums ${invalid ? 'text-motorsport-red' : 'text-motorsport-text'}`}>
-              {formatTime(currentMs)}
-            </span>
-            {invalid && (
-              <span className="eng-chip bg-motorsport-red/15 text-motorsport-red border-motorsport-red/30">INV</span>
-            )}
-          </div>
-        </div>
-
         {/* Sectors */}
-        <div className="px-2.5 py-1.5 shrink-0">
-          <div className="grid grid-cols-3 gap-1.5">
+        <div className="px-3 py-2.5 shrink-0">
+          <div className="grid grid-cols-3 gap-2">
             {sectorTimes.map((sec, i) => (
-              <div key={i} className="flex flex-col gap-0.5">
+              <div key={i} className="flex flex-col gap-1.5">
                 <span className="eng-label">S{i + 1}</span>
                 <span
-                  className="font-telemetry text-[11px] font-semibold tabular-nums"
-                  style={{ color: sec ? SECTOR_COLOURS[sec.colour] : '#4A6078' }}
+                  className="font-telemetry text-[15px] font-semibold tabular-nums leading-none"
+                  style={{ color: sec ? SECTOR_COLOURS[sec.colour] : '#5F7183' }}
                 >
-                  {sec ? formatTime(sec.ms) : '--:--.---'}
+                  {sec ? formatTime(sec.ms).replace(/^0:/, '') : '--.---'}
                 </span>
               </div>
             ))}
@@ -183,26 +177,27 @@ function TimingTower() {
         </div>
 
         {/* Session best */}
-        <div className="px-2.5 py-1.5 flex items-center justify-between shrink-0">
-          <span className="eng-label">SESSION BEST</span>
-          <span className="font-telemetry text-[13px] tabular-nums text-motorsport-cyan">
+        <div className="px-3 py-2.5 flex items-center justify-between shrink-0">
+          <span className="eng-label">Best</span>
+          <span className="font-telemetry text-[18px] font-semibold tabular-nums leading-none text-motorsport-purple">
             {bestMs ? formatTime(bestMs) : '--:--.---'}
           </span>
         </div>
 
-        {/* DRS */}
-        <div className="mt-auto px-2.5 py-1.5 flex items-center justify-between">
-          <span className="eng-label">DRS</span>
-          <span
-            className="eng-chip"
+        {/* DRS: one box whose outline says it all. Solid green = open,
+            dashed green = can be opened, quiet = closed. */}
+        <div className="mt-auto p-3">
+          <div
+            className="h-11 flex items-center justify-center border-2 text-[16px] font-bold tracking-wide uppercase transition-colors"
             style={{
-              backgroundColor: drsActive ? '#00E85A20' : drsAllowed ? '#FFD00015' : '#1A2840',
-              color:            drsActive ? '#00E85A'   : drsAllowed ? '#FFD000'   : '#4A6078',
-              borderColor:      drsActive ? '#00E85A40' : drsAllowed ? '#FFD00030' : '#1A2840',
+              borderStyle:     drsAllowed && !drsActive ? 'dashed' : 'solid',
+              borderColor:     drsActive || drsAllowed ? '#00E85A' : '#2A3745',
+              backgroundColor: drsActive ? '#00E85A1F' : 'transparent',
+              color:           drsActive || drsAllowed ? '#00E85A' : '#5F7183',
             }}
           >
-            {drsActive ? 'OPEN' : drsAllowed ? 'AVAIL' : 'CLOSED'}
-          </span>
+            {drsActive ? 'DRS open' : drsAllowed ? 'DRS available' : 'DRS closed'}
+          </div>
         </div>
       </div>
     </div>

@@ -4,17 +4,17 @@ import { useTelemetryStore } from '@/stores/telemetryStore';
 const ERS_MAX_J = 4_000_000;
 
 const ERS_MODES: Record<number, { label: string; color: string }> = {
-  0: { label: 'NONE',     color: '#4A6078' },
-  1: { label: 'MEDIUM',   color: '#00D4FF' },
-  2: { label: 'HOTLAP',   color: '#FFD000' },
-  3: { label: 'OVERTAKE', color: '#FF2044' },
+  0: { label: 'None',     color: '#9AACBE' },
+  1: { label: 'Medium',   color: '#00D4FF' },
+  2: { label: 'Hotlap',   color: '#FFD000' },
+  3: { label: 'Overtake', color: '#FF2044' },
 };
 
 function Stat({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div>
-      <span className="eng-label block">{label}</span>
-      <span className="font-telemetry text-[11px] tabular-nums" style={{ color }}>{value}</span>
+    <div className="flex flex-col gap-1.5">
+      <span className="eng-label">{label}</span>
+      <span className="font-telemetry text-[16px] font-semibold tabular-nums leading-none" style={{ color }}>{value}</span>
     </div>
   );
 }
@@ -37,35 +37,44 @@ function ERSSuite() {
     : null;
 
   const mode = ERS_MODES[deployMode] ?? ERS_MODES[0];
-  const storeColor = storePct < 20 ? '#FF2044' : storePct < 50 ? '#FFD000' : '#00D4FF';
+  const storeColor = storePct < 20 ? '#FF2044' : storePct < 50 ? '#FFD000' : '#E8EEF4';
 
   return (
-    <div className="telemetry-panel flex flex-col overflow-hidden">
-      <div className="panel-header justify-between">
-        <span className="eng-label font-bold">ERS</span>
-        <span
-          className="eng-chip"
-          style={{
-            backgroundColor: `${mode.color}18`,
-            color:            mode.color,
-            borderColor:      `${mode.color}40`,
-          }}
-        >
-          {mode.label}
-        </span>
+    <div className="telemetry-panel flex flex-col overflow-hidden px-3 py-3 gap-3">
+      {/* Deploy mode as a status box, outlined in the mode's colour */}
+      <div
+        className="h-11 flex items-center justify-center border-2 text-[16px] font-bold tracking-wide uppercase transition-colors"
+        style={{
+          borderColor:     deployMode > 0 ? mode.color : '#2A3745',
+          backgroundColor: deployMode > 0 ? `${mode.color}1F` : 'transparent',
+          color:           deployMode > 0 ? mode.color : '#5F7183',
+        }}
+      >
+        ERS {mode.label}
       </div>
 
-      <div className="px-2.5 py-2 grid grid-cols-3 gap-x-1 gap-y-1.5">
-        <Stat label="STORE"    value={`${storePct.toFixed(0)}%`}    color={storeColor} />
-        <Stat label="DEPLOYED" value={`${deployedPct.toFixed(0)}%`} color="#FF2044" />
-        <Stat label="HARVEST"  value={`${harvestPct.toFixed(0)}%`}  color="#1166FF" />
+      {/* Battery charge with its bar */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <span className="eng-label">Store</span>
+          <span className="font-telemetry text-[22px] font-bold tabular-nums leading-none" style={{ color: storeColor }}>
+            {storePct.toFixed(0)}%
+          </span>
+        </div>
+        <div className="eng-bar-track">
+          <div className="eng-bar-fill" style={{ width: `${storePct}%`, backgroundColor: storeColor }} />
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-x-2 gap-y-3">
+        <Stat label="Deployed" value={`${deployedPct.toFixed(0)}%`} color="#E8EEF4" />
+        <Stat label="Harvest"  value={`${harvestPct.toFixed(0)}%`}  color="#E8EEF4" />
         <Stat
-          label="EFF"
+          label="Efficiency"
           value={efficiency != null ? `${efficiency.toFixed(0)}%` : '--'}
-          color={efficiency != null ? (efficiency > 70 ? '#00E85A' : '#FFD000') : '#4A6078'}
+          color={efficiency != null ? (efficiency > 70 ? '#00E85A' : '#FFD000') : '#5F7183'}
         />
-        <Stat label="MGUK" value={`${(harvestedMguk / 1000).toFixed(0)}kJ`} color="#00D4FF" />
-        <Stat label="MGUH" value={`${(harvestedMguh / 1000).toFixed(0)}kJ`} color="#00D4FF" />
+        <Stat label="MGU-K" value={`${(harvestedMguk / 1000).toFixed(0)} kJ`} color="#9AACBE" />
+        <Stat label="MGU-H" value={`${(harvestedMguh / 1000).toFixed(0)} kJ`} color="#9AACBE" />
       </div>
     </div>
   );

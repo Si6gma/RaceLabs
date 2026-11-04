@@ -36,13 +36,13 @@ function LiveDashboard() {
   }, [setSession]);
 
   return (
-    <div className="h-full flex flex-col gap-px p-px overflow-hidden bg-motorsport-dim/20">
+    <div className="h-full flex flex-col gap-px p-px overflow-hidden bg-motorsport-border">
 
       {/* ── Main row ── */}
       <div className="flex gap-px flex-1 min-h-0">
 
-        {/* Left: Driver Inputs (60%) + Tyres (40%) */}
-        <div className="grid gap-px w-[216px] shrink-0" style={{ gridTemplateRows: '3fr 2fr' }}>
+        {/* Left: driver inputs hug their content; tyres take whatever is left */}
+        <div className="grid gap-px w-[300px] shrink-0" style={{ gridTemplateRows: 'auto 1fr' }}>
           <div className="min-h-0"><DriverInputsPanel /></div>
           <div className="min-h-0">
             <TyreAnalytics
@@ -58,41 +58,28 @@ function LiveDashboard() {
 
         {/* Center: Track Map */}
         <div className="flex-1 min-w-0 telemetry-panel overflow-hidden">
-          <div className="panel-header">
-            <span className="eng-label font-bold">Track Map</span>
-            {currentFrame?.session?.track_id !== undefined && (
-              <span className="font-telemetry text-[10px] text-motorsport-dim ml-auto">
-                ID·{currentFrame.session.track_id}
-                {currentFrame.session.track_length
-                  ? ` · ${(currentFrame.session.track_length / 1000).toFixed(3)}km`
-                  : ''}
-              </span>
-            )}
-          </div>
-          <div className="h-[calc(100%-33px)]">
-            <MiniTrackMapMemo
-              trackId={currentFrame?.session?.track_id}
-              trackLength={currentFrame?.session?.track_length}
-              playerCarIndex={viewedCarIndex}
-              allLapDistances={currentFrame?.all_lap_distances}
-              carTeamIds={currentFrame?.car_team_ids}
-              posX={m?.world_pos_x}
-              posZ={m?.world_pos_z}
-              lapNumber={l?.current_lap_num}
-              sessionType={currentFrame?.session?.session_type}
-            />
-          </div>
+          <MiniTrackMapMemo
+            trackId={currentFrame?.session?.track_id}
+            trackLength={currentFrame?.session?.track_length}
+            playerCarIndex={viewedCarIndex}
+            allLapDistances={currentFrame?.all_lap_distances}
+            carTeamIds={currentFrame?.car_team_ids}
+            posX={m?.world_pos_x}
+            posZ={m?.world_pos_z}
+            lapNumber={l?.current_lap_num}
+            sessionType={currentFrame?.session?.session_type}
+          />
         </div>
 
         {/* Right: Timing (the rest) + ERS (just its numbers) */}
-        <div className="grid gap-px w-[196px] shrink-0" style={{ gridTemplateRows: '1fr auto' }}>
+        <div className="grid gap-px w-[300px] shrink-0" style={{ gridTemplateRows: '1fr auto' }}>
           <div className="min-h-0"><TimingTower /></div>
           <div><ERSSuite /></div>
         </div>
       </div>
 
       {/* ── Telemetry Trace ── */}
-      <div className="h-[300px] shrink-0">
+      <div className="h-[320px] shrink-0">
         <TelemetryTimeline />
       </div>
     </div>

@@ -10,6 +10,7 @@ interface LightsState {
 
 // Header control for the room lamps: on/off, and a master brightness that
 // scales every effect. Hidden when the backend has no Home Assistant token.
+// Every control is always laid out so toggling never shifts the header.
 export default function LightsControl() {
   const [state, setState] = useState<LightsState | null>(null);
   const timer = useRef<number>();
@@ -52,46 +53,52 @@ export default function LightsControl() {
     fetch('/api/lights/test', { method: 'POST' }).then(refresh).catch(() => {});
   };
 
+  const off = !state.enabled;
+
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center border border-motorsport-border">
       <button
         onClick={toggle}
         title={state.enabled ? 'Race lights on' : 'Race lights off'}
-        className={`flex items-center gap-1.5 px-2.5 py-1 border text-[11px] font-bold tracking-widest uppercase transition-colors ${
+        className={`flex items-center gap-1.5 px-2.5 h-7 text-[12px] font-bold tracking-wide uppercase transition-colors ${
           state.enabled
-            ? 'bg-motorsport-orange/15 text-motorsport-orange border-motorsport-orange/40 hover:bg-motorsport-orange/25'
-            : 'bg-transparent text-motorsport-dim border-motorsport-border hover:text-motorsport-muted hover:border-motorsport-muted/40'
+            ? 'bg-motorsport-orange/15 text-motorsport-orange hover:bg-motorsport-orange/25'
+            : 'bg-transparent text-motorsport-muted hover:text-motorsport-text'
         }`}
       >
-        <Lightbulb className="w-3 h-3" />
-        LIGHTS
+        <Lightbulb className="w-3.5 h-3.5" />
+        Lights
       </button>
-      {state.enabled && (
-        <label className="flex items-center gap-1.5" title="Lamp brightness for every effect">
-          <input
-            type="range"
-            min={10}
-            max={100}
-            step={5}
-            value={state.brightness}
-            onChange={e => slide(Number(e.target.value))}
-            className="w-[70px] h-1 accent-motorsport-orange cursor-pointer"
-          />
-          <span className="font-telemetry text-[11px] tabular-nums text-motorsport-muted w-[32px]">
-            {state.brightness}%
-          </span>
-        </label>
-      )}
-      {state.enabled && (
-        <button
-          onClick={test}
-          disabled={state.testing}
-          title="Cycle the lamps through every phase (about a minute). Not while the game is live."
-          className="px-2 py-1 border border-motorsport-border text-[11px] font-bold tracking-widest uppercase text-motorsport-dim hover:text-motorsport-muted hover:border-motorsport-muted/40 disabled:text-motorsport-orange disabled:border-motorsport-orange/40 disabled:cursor-wait transition-colors"
-        >
-          {state.testing ? 'TESTING' : 'TEST'}
-        </button>
-      )}
+      <label
+        className={`flex items-center gap-2 px-2.5 h-7 border-l border-motorsport-border transition-opacity ${off ? 'opacity-40' : ''}`}
+        title="Lamp brightness for every effect"
+      >
+        <input
+          type="range"
+          min={10}
+          max={100}
+          step={5}
+          value={state.brightness}
+          disabled={off}
+          onChange={e => slide(Number(e.target.value))}
+          className="w-[72px] h-1 accent-motorsport-orange cursor-pointer disabled:cursor-default"
+        />
+        <span className="font-telemetry text-[12px] tabular-nums text-motorsport-muted w-[32px] text-right">
+          {state.brightness}%
+        </span>
+      </label>
+      <button
+        onClick={test}
+        disabled={off || state.testing}
+        title="Cycle the lamps through every phase (about a minute). Not while the game is live."
+        className={`px-2.5 h-7 border-l border-motorsport-border text-[12px] font-bold tracking-wide uppercase transition-colors ${
+          state.testing
+            ? 'text-motorsport-orange cursor-wait'
+            : off ? 'text-motorsport-muted opacity-40 cursor-default' : 'text-motorsport-muted hover:text-motorsport-text'
+        }`}
+      >
+        {state.testing ? 'Testing' : 'Test'}
+      </button>
     </div>
   );
 }

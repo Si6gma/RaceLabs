@@ -10,34 +10,24 @@ interface TyreAnalyticsProps {
 }
 
 const COMPOUND_META: Record<number, { name: string; color: string }> = {
-  16: { name: 'SOFT',  color: '#FF2044' },
-  17: { name: 'MED',   color: '#FFD000' },
-  18: { name: 'HARD',  color: '#FFFFFF' },
-  19: { name: 'INTER', color: '#00E85A' },
-  20: { name: 'WET',   color: '#00D4FF' },
+  16: { name: 'Soft',   color: '#FF2044' },
+  17: { name: 'Medium', color: '#FFD000' },
+  18: { name: 'Hard',   color: '#FFFFFF' },
+  19: { name: 'Inter',  color: '#00E85A' },
+  20: { name: 'Wet',    color: '#00D4FF' },
 };
 
-function tempColor(t: number): string {
-  if (t === 0)   return '#243546';
-  if (t < 70)    return '#1166FF';
-  if (t < 85)    return '#00D4FF';
-  if (t < 105)   return '#00E85A';
-  if (t < 115)   return '#FFD000';
-  return '#FF2044';
-}
+const TEMP_BANDS: [number, string][] = [
+  [70,  '#1166FF'],
+  [85,  '#00D4FF'],
+  [105, '#00E85A'],
+  [115, '#FFD000'],
+  [Infinity, '#FF2044'],
+];
 
-function TempZone({ label, temp }: { label: string; temp: number }) {
-  const color  = tempColor(temp);
-  const isData = temp > 0;
-  return (
-    <div className="flex flex-col items-center gap-px">
-      <span className="text-[8px] text-motorsport-dim font-semibold uppercase tracking-wider">{label}</span>
-      <span className="font-telemetry text-[10px] font-bold tabular-nums" style={{ color: isData ? color : '#243546' }}>
-        {isData ? temp.toFixed(0) : '--'}
-      </span>
-      <div className="w-4 h-px" style={{ backgroundColor: isData ? color : '#1A2840' }} />
-    </div>
-  );
+function tempColor(t: number): string {
+  if (t === 0) return '#5F7183';
+  return TEMP_BANDS.find(([max]) => t < max)![1];
 }
 
 const TYRE_LABELS = ['FL', 'FR', 'RL', 'RR'];
@@ -47,48 +37,43 @@ function TyreCard({
 }: {
   label: string; surface: number; inner: number; pressure: number; wear: number;
 }) {
-  const mid     = surface > 0 && inner > 0 ? (surface + inner) / 2 : 0;
-  const health  = Math.max(0, 100 - wear);
+  const health    = Math.max(0, 100 - wear);
   const wearColor = wear > 70 ? '#FF2044' : wear > 40 ? '#FFD000' : '#00E85A';
-  const hasData = surface > 0 || inner > 0;
-  const avgTemp = mid || surface || inner;
+  const hasData   = surface > 0 || inner > 0;
 
   return (
-    <div
-      className="bg-motorsport-dark border flex flex-col gap-1.5 p-1.5"
-      style={{ borderColor: hasData ? `${tempColor(avgTemp)}40` : '#1A2840' }}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-bold tracking-widest text-motorsport-muted uppercase">{label}</span>
-        {hasData && (
-          <span className="font-telemetry text-[9px] tabular-nums" style={{ color: wearColor }}>
-            {health.toFixed(0)}%
-          </span>
-        )}
-      </div>
-
-      {/* I / M / O zones */}
-      <div className="flex justify-around">
-        <TempZone label="I" temp={inner}   />
-        <TempZone label="M" temp={mid}     />
-        <TempZone label="O" temp={surface} />
-      </div>
-
-      {/* Wear bar */}
-      <div className="h-[2px] bg-motorsport-border">
-        <div
-          className="h-full transition-[width] duration-150"
-          style={{ width: `${health}%`, backgroundColor: wearColor }}
-        />
-      </div>
-
-      {/* Pressure */}
-      {pressure > 0 && (
-        <span className="font-telemetry text-[8px] text-motorsport-dim tabular-nums text-right">
-          {pressure.toFixed(1)} psi
+    <div className="bg-motorsport-dark flex flex-col gap-2 p-2.5 min-h-0">
+      {/* Surface temperature is the headline: the number the colour bands judge */}
+      <div className="flex items-baseline justify-between">
+        <span className="text-[13px] font-bold tracking-wide text-motorsport-text">{label}</span>
+        <span className="font-telemetry text-[26px] font-bold tabular-nums leading-none" style={{ color: tempColor(surface) }}>
+          {surface > 0 ? `${surface.toFixed(0)}°` : '--'}
         </span>
-      )}
+      </div>
+      <div className="flex items-baseline justify-between">
+        <span className="text-[12px] text-motorsport-muted font-semibold">inner</span>
+        <span className="font-telemetry text-[14px] tabular-nums leading-none" style={{ color: tempColor(inner) }}>
+          {inner > 0 ? `${inner.toFixed(0)}°` : '--'}
+        </span>
+      </div>
+
+      {/* Tread left: bar drains as the tyre wears */}
+      <div className="flex items-baseline justify-between pt-1">
+        <span className="text-[12px] text-motorsport-muted font-semibold">wear</span>
+        <span className="font-telemetry text-[14px] tabular-nums leading-none" style={{ color: hasData ? wearColor : '#5F7183' }}>
+          {hasData ? `${wear.toFixed(0)}%` : '--'}
+        </span>
+      </div>
+      <div className="h-[3px] bg-motorsport-border">
+        <div className="h-full transition-[width] duration-150" style={{ width: `${health}%`, backgroundColor: hasData ? wearColor : 'transparent' }} />
+      </div>
+
+      <div className="flex items-baseline justify-between">
+        <span className="text-[12px] text-motorsport-muted font-semibold">pressure</span>
+        <span className="font-telemetry text-[13px] text-motorsport-text tabular-nums leading-none">
+          {pressure > 0 ? `${pressure.toFixed(1)} psi` : '--'}
+        </span>
+      </div>
     </div>
   );
 }
@@ -101,54 +86,31 @@ function TyreAnalytics({
   compound     = 0,
   tyreAgeLaps  = 0,
 }: TyreAnalyticsProps) {
-  const meta = COMPOUND_META[compound] ?? { name: compound ? `C${compound}` : '---', color: '#4A6078' };
+  const meta = COMPOUND_META[compound] ?? { name: compound ? `C${compound}` : '', color: '#9AACBE' };
 
   return (
-    <div className="telemetry-panel flex flex-col h-full overflow-hidden">
-      <div className="panel-header justify-between">
-        <span className="eng-label font-bold">Tyres</span>
-        <div className="flex items-center gap-2">
+    <div className="telemetry-panel relative h-full overflow-hidden p-2 grid grid-cols-2 grid-rows-2 gap-2">
+      {/* Laid out as the car: fronts on top */}
+      {TYRE_LABELS.map((lbl, i) => (
+        <TyreCard
+          key={lbl}
+          label={lbl}
+          surface={surfaceTemps[i] ?? 0}
+          inner={innerTemps[i]     ?? 0}
+          pressure={pressures[i]   ?? 0}
+          wear={wear[i]            ?? 0}
+        />
+      ))}
+
+      {/* Compound sits at the hub, between the four tyres */}
+      {meta.name && (
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-baseline gap-1.5 px-2.5 py-1 bg-motorsport-panel border border-motorsport-border-strong">
+          <span className="text-[14px] font-bold tracking-wide leading-none" style={{ color: meta.color }}>{meta.name}</span>
           {tyreAgeLaps > 0 && (
-            <span className="font-telemetry text-[9px] text-motorsport-dim tabular-nums">+{tyreAgeLaps}L</span>
+            <span className="font-telemetry text-[12px] text-motorsport-muted tabular-nums leading-none">{tyreAgeLaps}L</span>
           )}
-          <span
-            className="text-[12px] font-bold tracking-wider"
-            style={{ color: meta.color, fontFamily: "'JetBrains Mono', monospace" }}
-          >
-            {meta.name}
-          </span>
         </div>
-      </div>
-
-      {/* 2×2 grid */}
-      <div className="flex-1 min-h-0 p-1.5 grid grid-cols-2 gap-1.5 content-start">
-        {TYRE_LABELS.map((lbl, i) => (
-          <TyreCard
-            key={lbl}
-            label={lbl}
-            surface={surfaceTemps[i] ?? 0}
-            inner={innerTemps[i]     ?? 0}
-            pressure={pressures[i]   ?? 0}
-            wear={wear[i]            ?? 0}
-          />
-        ))}
-      </div>
-
-      {/* Thermal legend */}
-      <div className="px-2.5 py-1 border-t border-motorsport-border/40 flex gap-2 flex-wrap shrink-0">
-        {[
-          ['<70°', '#1166FF'],
-          ['70-85°', '#00D4FF'],
-          ['85-105°', '#00E85A'],
-          ['105-115°', '#FFD000'],
-          ['>115°', '#FF2044'],
-        ].map(([label, color]) => (
-          <div key={label} className="flex items-center gap-1">
-            <div className="w-1.5 h-1.5" style={{ backgroundColor: color }} />
-            <span className="text-[8px] text-motorsport-dim">{label}</span>
-          </div>
-        ))}
-      </div>
+      )}
     </div>
   );
 }

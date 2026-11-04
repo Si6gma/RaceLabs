@@ -201,12 +201,12 @@ function TrackMap({
         for (let i = 1; i < geo.edgeRight.length; i++) ctx.lineTo(geo.edgeRight[i][0], geo.edgeRight[i][1]);
         for (let i = geo.edgeLeft.length - 1; i >= 0; i--) ctx.lineTo(geo.edgeLeft[i][0], geo.edgeLeft[i][1]);
         ctx.closePath();
-        ctx.fillStyle = 'rgba(14,22,32,0.85)';
+        ctx.fillStyle = '#141B24';
         ctx.fill();
 
         // Edge strokes
-        ctx.strokeStyle = '#243856';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#3A4A5C';
+        ctx.lineWidth = 2;
         ctx.lineCap = 'round';
         strokePoly(ctx, geo.edgeRight); ctx.stroke();
         strokePoly(ctx, geo.edgeLeft);  ctx.stroke();
@@ -229,27 +229,24 @@ function TrackMap({
             const color = teamColor(teams?.[i] as number | undefined);
 
             if (isPlayer) {
-              // White highlight ring
+              // Orange ring: the one colour on the page that means "you"
               ctx.beginPath();
-              ctx.arc(sx, sy, 7.5, 0, Math.PI * 2);
-              ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-              ctx.lineWidth = 2;
+              ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+              ctx.strokeStyle = '#FF7A1A';
+              ctx.lineWidth = 2.5;
               ctx.stroke();
-              // Glow
               ctx.beginPath();
-              ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-              ctx.fillStyle = `${color}55`;
-              ctx.fill();
-              // Core dot
-              ctx.beginPath();
-              ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+              ctx.arc(sx, sy, 6, 0, Math.PI * 2);
               ctx.fillStyle = color;
               ctx.fill();
             } else {
               ctx.beginPath();
-              ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+              ctx.arc(sx, sy, 5, 0, Math.PI * 2);
               ctx.fillStyle = color;
               ctx.fill();
+              ctx.strokeStyle = '#07090C';
+              ctx.lineWidth = 1.5;
+              ctx.stroke();
             }
           }
         }
@@ -260,15 +257,10 @@ function TrackMap({
         const previous = tracePrevRef.current;
 
         if (current.length + previous.length < 2) {
-          ctx.strokeStyle = '#1A2840';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.arc(W / 2, H / 2, 24, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.fillStyle = '#4A6078';
-          ctx.font = '10px "Barlow Condensed", monospace';
+          ctx.fillStyle = '#9AACBE';
+          ctx.font = '600 14px "Barlow Condensed", sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText('WAITING FOR GPS', W / 2, H / 2 + 4);
+          ctx.fillText('Waiting for position data', W / 2, H / 2 + 5);
           return;
         }
 

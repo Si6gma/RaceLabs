@@ -100,6 +100,7 @@ export interface CarStatus {
   ers_harvested_this_lap_mguk: number;
   ers_harvested_this_lap_mguh: number;
   ers_deployed_this_lap: number;
+  max_rpm?: number;
 }
 
 export interface CarDamage {

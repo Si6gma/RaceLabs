@@ -19,7 +19,12 @@ const CHANNELS = [
 ];
 
 const DIVIDERS = [0.27, 0.49, 0.69];
-const PAD = { top: 8, right: 64, bottom: 24, left: 36 };
+const PAD = { top: 10, right: 92, bottom: 28, left: 48 };
+const LABEL_FONT = '600 12px "Barlow Condensed", sans-serif';
+const AXIS_FONT  = '12px "JetBrains Mono", monospace';
+const GRID       = '#1E2834';
+const GRID_STRONG = '#2A3745';
+const AXIS_TEXT  = '#9AACBE';
 
 function buildDataPoints(): DataPoint[] {
   const frameHistory = getFrameHistory();
@@ -55,9 +60,15 @@ function draw(canvas: HTMLCanvasElement, data: DataPoint[]) {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
 
-  canvas.width  = rect.width  * dpr;
-  canvas.height = rect.height * dpr;
-  ctx.scale(dpr, dpr);
+  // Setting width/height reallocates the bitmap, which at retina size is the
+  // most expensive thing here. Only do it when the box actually changed.
+  const targetW = Math.round(rect.width  * dpr);
+  const targetH = Math.round(rect.height * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width  = targetW;
+    canvas.height = targetH;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const W = rect.width;
   const H = rect.height;
@@ -65,12 +76,12 @@ function draw(canvas: HTMLCanvasElement, data: DataPoint[]) {
   const gH = H - PAD.top  - PAD.bottom;
 
   // Background
-  ctx.fillStyle = '#060A0F';
+  ctx.fillStyle = '#0D1117';
   ctx.fillRect(0, 0, W, H);
 
   // Subtle grid
-  ctx.strokeStyle = '#1A2840';
-  ctx.lineWidth   = 0.5;
+  ctx.strokeStyle = GRID;
+  ctx.lineWidth   = 1;
   const gridCols = 8;
   for (let i = 0; i <= gridCols; i++) {
     const x = PAD.left + (i / gridCols) * gW;
@@ -81,8 +92,8 @@ function draw(canvas: HTMLCanvasElement, data: DataPoint[]) {
   }
 
   // Band dividers
-  ctx.strokeStyle = '#243856';
-  ctx.lineWidth   = 0.5;
+  ctx.strokeStyle = GRID_STRONG;
+  ctx.lineWidth   = 1;
   for (const frac of DIVIDERS) {
     const y = PAD.top + gH * frac;
     ctx.beginPath();
@@ -91,23 +102,25 @@ function draw(canvas: HTMLCanvasElement, data: DataPoint[]) {
     ctx.stroke();
   }
 
-  // Channel labels (right legend)
-  const labeled = new Set<string>();
-  ctx.font      = '9px "JetBrains Mono", monospace';
-  ctx.textAlign = 'left';
+  // Channel labels (right legend). Throttle and brake share a band, so the
+  // second label in a band steps down a line instead of overprinting.
+  const labelRows = new Map<number, number>();
+  ctx.font         = LABEL_FONT;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'alphabetic';
   CHANNELS.forEach(ch => {
-    if (labeled.has(ch.label)) return;
-    labeled.add(ch.label);
+    const row = labelRows.get(ch.offset) ?? 0;
+    labelRows.set(ch.offset, row + 1);
     ctx.fillStyle = ch.color;
-    ctx.fillText(ch.label, PAD.left + gW + 4, PAD.top + gH * ch.offset + 10);
+    ctx.fillText(ch.label, PAD.left + gW + 8, PAD.top + gH * ch.offset + 14 + row * 16);
   });
 
   if (data.length < 2) {
-    ctx.fillStyle    = '#4A6078';
-    ctx.font         = '10px "Barlow Condensed", "JetBrains Mono", monospace';
+    ctx.fillStyle    = AXIS_TEXT;
+    ctx.font         = '600 14px "Barlow Condensed", sans-serif';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('WAITING FOR LAP DATA', PAD.left + gW / 2, PAD.top + gH / 2);
+    ctx.fillText('Waiting for lap data', PAD.left + gW / 2, PAD.top + gH / 2);
     return;
   }
 
@@ -125,8 +138,8 @@ function draw(canvas: HTMLCanvasElement, data: DataPoint[]) {
   // Draw channel traces
   for (const ch of CHANNELS) {
     ctx.strokeStyle = ch.color;
-    ctx.lineWidth   = ch.key === 'speed' ? 1.5 : 1;
-    ctx.globalAlpha = ch.key === 'throttle' || ch.key === 'brake' ? 0.8 : 0.9;
+    ctx.lineWidth   = ch.key === 'speed' ? 2 : 1.5;
+    ctx.globalAlpha = 1;
     ctx.lineJoin    = 'round';
 
     const pts: [number, number][] = data.map(p => [toX(p.dist), toY(p[ch.key], ch)]);
@@ -149,25 +162,25 @@ function draw(canvas: HTMLCanvasElement, data: DataPoint[]) {
   }
 
   // X-axis distance labels
-  ctx.fillStyle    = '#4A6078';
-  ctx.font         = '9px "JetBrains Mono", monospace';
+  ctx.fillStyle    = AXIS_TEXT;
+  ctx.font         = AXIS_FONT;
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'alphabetic';
   const ticks = 6;
   for (let i = 0; i <= ticks; i++) {
     const dist = xMin + (i / ticks) * xRange;
     const x    = PAD.left + (i / ticks) * gW;
-    ctx.fillText(dist >= 1000 ? `${(dist / 1000).toFixed(2)}km` : `${Math.round(dist)}m`, x, H - 6);
+    ctx.fillText(dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${Math.round(dist)} m`, x, H - 8);
   }
 
   // Y-axis speed labels (left)
   ctx.textAlign    = 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle    = '#4A6078';
+  ctx.fillStyle    = AXIS_TEXT;
   for (const v of [0, 175, 350]) {
     const norm = (v - 0) / 350;
     const y = PAD.top + CHANNELS[0].offset * gH + CHANNELS[0].scale * gH * (1 - norm);
-    ctx.fillText(String(v), PAD.left - 4, y);
+    ctx.fillText(String(v), PAD.left - 8, y);
   }
 }
 
@@ -194,16 +207,8 @@ function TelemetryTimeline() {
   }, []);
 
   return (
-    <div className="telemetry-panel flex flex-col h-full overflow-hidden">
-      <div className="panel-header justify-between">
-        <span className="eng-label font-bold">Telemetry Trace</span>
-        <span className="text-[10px] text-motorsport-dim font-telemetry tracking-wide">
-          SPEED · THROTTLE · BRAKE · GEAR · STEER
-        </span>
-      </div>
-      <div className="flex-1 min-h-0">
-        <canvas ref={canvasRef} className="block w-full h-full" />
-      </div>
+    <div className="telemetry-panel h-full overflow-hidden">
+      <canvas ref={canvasRef} className="block w-full h-full" />
     </div>
   );
 }

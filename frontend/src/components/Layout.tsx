@@ -2,7 +2,6 @@ import { NavLink } from 'react-router-dom';
 import { useEffect, useState, useMemo, memo } from 'react';
 import { Activity, GitCompare, Table, BarChart3, Settings, Radio } from 'lucide-react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
-import CarSelector from '@/components/CarSelector';
 import LightsControl from '@/components/LightsControl';
 
 const navItems = [
@@ -41,9 +40,9 @@ function GameStatusIndicator({ sessionLabel }: { sessionLabel: string | null }) 
   }[gameStatus];
 
   return (
-    <div className="flex items-center gap-2">
-      <span className={`w-[5px] h-[5px] ${cfg.dot}`} />
-      <span className={`text-[11px] font-bold tracking-widest uppercase ${cfg.text}`}>{cfg.label}</span>
+    <div className="flex items-center justify-end gap-2 w-[112px] shrink-0">
+      <span className={`w-[6px] h-[6px] shrink-0 ${cfg.dot}`} />
+      <span className={`text-[13px] font-bold tracking-wide uppercase truncate ${cfg.text}`}>{cfg.label}</span>
     </div>
   );
 }
@@ -78,29 +77,29 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Brand */}
         <div className="flex items-center gap-2 px-4 h-full border-r border-motorsport-border shrink-0">
           <Radio className="w-3.5 h-3.5 text-motorsport-orange" />
-          <span className="text-[15px] font-bold tracking-[0.22em] text-motorsport-text uppercase">TEL</span>
-          <span className="text-[11px] font-light tracking-[0.1em] text-motorsport-muted uppercase">SUITE</span>
+          <span className="text-[16px] font-bold tracking-[0.2em] text-motorsport-text uppercase">TEL</span>
+          <span className="text-[12px] font-medium tracking-[0.1em] text-motorsport-muted uppercase">SUITE</span>
         </div>
 
-        {/* Session chips — full height dividers */}
+        {/* Where we are: circuit name carries the header, session type sits beside it */}
         {session && (
-          <div className="flex items-center h-full text-[11px] font-semibold tracking-wider uppercase">
-            <HeaderChip label={session.track} />
-            <HeaderChip label={session.session_type} />
-            <HeaderChip label={`LAP ${session.current_lap}${session.total_laps ? `/${session.total_laps}` : ''}`} />
+          <div className="flex items-center h-full px-4 gap-3 border-r border-motorsport-border">
+            <span className="text-[20px] font-bold tracking-wide text-motorsport-text leading-none">
+              {session.track}
+            </span>
+            <span className="px-2 py-0.5 border border-motorsport-border-strong text-[12px] font-bold tracking-wide uppercase text-motorsport-muted leading-none">
+              {session.session_type}
+            </span>
             {session.best_lap_time && (
-              <div className="flex items-center h-full px-4 border-r border-motorsport-border gap-2">
-                <span className="text-motorsport-muted">BEST</span>
-                <span className="font-telemetry text-motorsport-cyan">{formatBestLap(session.best_lap_time)}</span>
-              </div>
+              <span className="font-telemetry text-[14px] tabular-nums text-motorsport-purple ml-1">
+                {formatBestLap(session.best_lap_time)}
+              </span>
             )}
           </div>
         )}
 
         {/* Right controls */}
         <div className="ml-auto flex items-center gap-3 px-4 h-full border-l border-motorsport-border">
-          <CarSelector />
-
           {replayMode && (
             <span className="eng-chip bg-motorsport-purple/15 text-motorsport-purple border-motorsport-purple/30">
               REPLAY
@@ -111,7 +110,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
           <button
             onClick={toggleRecording}
-            className={`flex items-center gap-1.5 px-2.5 py-1 border text-[11px] font-bold tracking-widest uppercase transition-colors ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 border text-[12px] font-bold tracking-wide uppercase transition-colors ${
               recording
                 ? 'bg-motorsport-red/15 text-motorsport-red border-motorsport-red/40 hover:bg-motorsport-red/25'
                 : 'bg-transparent text-motorsport-dim border-motorsport-border hover:text-motorsport-muted hover:border-motorsport-muted/40'
@@ -132,17 +131,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       <div className="flex flex-1 overflow-hidden">
         {/* ── Sidebar ── */}
-        <nav className="w-[58px] bg-motorsport-charcoal border-r border-motorsport-border flex flex-col py-1 shrink-0">
+        <nav className="w-[68px] bg-motorsport-charcoal border-r border-motorsport-border flex flex-col py-1 shrink-0">
           {navItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
               end={item.path === '/'}
               className={({ isActive }) =>
-                `relative flex flex-col items-center justify-center h-[54px] transition-all ${
+                `relative flex flex-col items-center justify-center h-[58px] transition-all ${
                   isActive
                     ? 'text-motorsport-orange bg-motorsport-orange/[0.07]'
-                    : 'text-motorsport-dim hover:text-motorsport-muted hover:bg-motorsport-surface/30'
+                    : 'text-motorsport-muted hover:text-motorsport-text hover:bg-motorsport-surface/30'
                 }`
               }
             >
@@ -151,8 +150,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   {isActive && (
                     <span className="absolute left-0 inset-y-3 w-[2px] bg-motorsport-orange" />
                   )}
-                  <item.icon className="w-4 h-4" strokeWidth={1.5} />
-                  <span className="text-[9px] mt-1 tracking-widest uppercase font-semibold">{item.label}</span>
+                  <item.icon className="w-[18px] h-[18px]" strokeWidth={1.75} />
+                  <span className="text-[11px] mt-1.5 tracking-wide uppercase font-semibold">{item.label}</span>
                 </>
               )}
             </NavLink>
@@ -164,14 +163,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
-    </div>
-  );
-}
-
-function HeaderChip({ label }: { label: string }) {
-  return (
-    <div className="flex items-center h-full px-4 border-r border-motorsport-border text-motorsport-muted">
-      {label}
     </div>
   );
 }

@@ -29,6 +29,7 @@ export class SectorTracker {
   private sessionBest: Array<number | null> = [null, null, null];
   private carBest = new Map<number, Array<number | null>>();
   private latest = new Map<number, Array<SectorTime | null>>();
+  private bestLap = new Map<number, number>();
 
   update(laps: LapData[]) {
     laps.forEach((car, idx) => {
@@ -61,6 +62,12 @@ export class SectorTracker {
         if (best == null || ms < best) this.sessionBest[done] = ms;
         if (mine == null || ms < mine) bests[done] = ms;
         this.carBest.set(idx, bests);
+        // A clean lap just finished: keep the car's fastest for the session.
+        if (done === 2) {
+          const lapMs = car.last_lap_time_ms;
+          const bestLap = this.bestLap.get(idx);
+          if (lapMs > 0 && (bestLap == null || lapMs < bestLap)) this.bestLap.set(idx, lapMs);
+        }
       }
       const latest = this.latest.get(idx) ?? [null, null, null];
       latest[done] = { ms, colour };
@@ -70,5 +77,9 @@ export class SectorTracker {
 
   latestFor(carIdx: number): Array<SectorTime | null> {
     return this.latest.get(carIdx) ?? [null, null, null];
+  }
+
+  bestLapFor(carIdx: number): number | null {
+    return this.bestLap.get(carIdx) ?? null;
   }
 }

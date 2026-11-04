@@ -14,6 +14,7 @@ receiving.
 | Safety car | Session `safety_car_status == 1` | Amber pulse while deployed |
 | Virtual safety car | Session `safety_car_status == 2` | Dimmer amber pulse while deployed |
 | Yellow flag on the player | Car status `vehicleFiaFlags == 3` | Yellow while shown |
+| Racing resumes | Safety car or VSC status back to 0, or the yellow clearing | Green 2 s (1.5 s after a yellow) |
 | Player sets fastest lap | Event `FTLP` with the player's index | Purple 2 s |
 | Personal best lap | Lap data: a valid lap faster than the previous best | Green 2 s |
 | Penalty or lap invalidated | Event `PENA` for the player, or `current_lap_invalid` rising | Short red double pulse |

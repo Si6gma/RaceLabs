@@ -42,6 +42,9 @@ PATTERNS: Dict[str, Tuple[List[Tuple[float, Lamp, Lamp]], bool]] = {
     "safety_car": ([(1.2, _c(AMBER, 100), _c(AMBER, 100)), (1.2, _c(AMBER, 35), _c(AMBER, 35))], True),
     "vsc": ([(1.2, _c(AMBER, 60), _c(AMBER, 60)), (1.2, _c(AMBER, 20), _c(AMBER, 20))], True),
     "yellow": ([(1.0, _c(YELLOW, 100), _c(YELLOW, 100))], True),
+    # Racing resumes: the safety car or VSC comes in, or a yellow clears.
+    "green_flag": ([(2.0, _c(GREEN, 100), _c(GREEN, 100))], False),
+    "yellow_clear": ([(1.5, _c(GREEN, 100), _c(GREEN, 100))], False),
     "penalty": ([(0.4, _c(RED, 100), _c(RED, 100)), (0.3, OFF, OFF), (0.4, _c(RED, 100), _c(RED, 100))], False),
     "fastest": ([(2.0, _c(PURPLE, 100), _c(PURPLE, 100))], False),
     "pb": ([(2.0, _c(GREEN, 100), _c(GREEN, 100))], False),
@@ -55,7 +58,7 @@ PATTERNS: Dict[str, Tuple[List[Tuple[float, Lamp, Lamp]], bool]] = {
 # Highest first.
 PRIORITY = [
     "red_flag", "start_5", "start_4", "start_3", "start_2", "start_1",
-    "lights_out", "chequered", "safety_car", "vsc", "yellow",
+    "lights_out", "chequered", "safety_car", "vsc", "green_flag", "yellow", "yellow_clear",
     "penalty", "fastest", "pb", "sector_purple", "sector_green", "sector_yellow",
     "garage", "pit",
 ]
@@ -107,13 +110,18 @@ class RaceLights:
         session = frame.get("session")
         if session:
             sc = session.get("safety_car_status", 0)
+            if sc == 0 and ("safety_car" in self._active or "vsc" in self._active):
+                self._flash("green_flag", now)
             self._hold("safety_car", sc == SC_FULL, now)
             self._hold("vsc", sc == SC_VIRTUAL, now)
             self._session_type = session.get("session_type", 0)
 
         status = frame.get("status")
         if status:
-            self._hold("yellow", status.get("fia_flags") == FIA_YELLOW, now)
+            yellow = status.get("fia_flags") == FIA_YELLOW
+            if not yellow and "yellow" in self._active:
+                self._flash("yellow_clear", now)
+            self._hold("yellow", yellow, now)
 
         lap = frame.get("lap")
         if lap:

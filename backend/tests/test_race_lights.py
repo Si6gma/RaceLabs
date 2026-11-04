@@ -106,7 +106,22 @@ class RaceLightsTest(unittest.TestCase):
         self.assertEqual(self.l.look(1.3)[0], (*AMBER, 35))
         self.assertEqual(self.l.look(60.1)[0][:3], AMBER)
         self.l.feed({"session": {"safety_car_status": 0}}, 61)
-        self.assertIsNone(self.l.look(61))
+        self.assertEqual(colour(self.l.look(61)), GREEN)
+        self.assertIsNone(self.l.look(63.1))
+
+    def test_green_when_racing_resumes(self):
+        self.l.feed({"session": {"safety_car_status": 2}}, 0)
+        self.l.feed({"session": {"safety_car_status": 0}}, 30)
+        self.assertEqual(colour(self.l.look(30.1)), GREEN)
+        self.assertIsNone(self.l.look(32.1))
+        self.l.feed({"status": {"fia_flags": 3}}, 40)
+        self.l.feed({"status": {"fia_flags": 0}}, 45)
+        self.assertEqual(colour(self.l.look(45.1)), GREEN)
+        self.assertIsNone(self.l.look(46.6))
+
+    def test_no_green_without_a_caution(self):
+        self.l.feed({"session": {"safety_car_status": 0}, "status": {"fia_flags": 0}}, 0)
+        self.assertIsNone(self.l.look(0.1))
 
     def test_safety_car_beats_penalty(self):
         self.l.feed({"session": {"safety_car_status": 1}}, 0)

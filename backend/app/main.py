@@ -196,7 +196,8 @@ class LightsUpdate(BaseModel):
 async def get_lights():
     if not lights:
         return {"configured": False}
-    return {"configured": True, "enabled": lights.enabled, "brightness": lights.brightness}
+    return {"configured": True, "enabled": lights.enabled, "brightness": lights.brightness,
+            "testing": lights.demo_running}
 
 
 @app.post("/api/lights")
@@ -204,6 +205,17 @@ async def set_lights(body: LightsUpdate):
     if not lights:
         raise HTTPException(status_code=404, detail="Race lights not configured")
     lights.configure(enabled=body.enabled, brightness=body.brightness)
+    return await get_lights()
+
+
+@app.post("/api/lights/test")
+async def test_lights():
+    """Run every lamp phase, about a minute, unless the game is live."""
+    if not lights:
+        raise HTTPException(status_code=404, detail="Race lights not configured")
+    refused = lights.start_demo()
+    if refused:
+        raise HTTPException(status_code=409, detail=f"Can't test the lights: {refused}")
     return await get_lights()
 
 

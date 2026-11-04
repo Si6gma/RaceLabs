@@ -134,6 +134,30 @@ class ControlTest(unittest.TestCase):
         self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": True}})
         self.assertEqual(self.tick(1000.8)[0][:2], ("scene", "create"))
 
+    def test_demo_plays_every_phase_then_ends_the_session(self):
+        lights = self.ha.lights
+        with mock.patch.object(lights, "_flash", wraps=lights._flash) as flash, \
+             mock.patch.object(lights, "_hold", wraps=lights._hold) as hold:
+            asyncio.run(self.ha._run_demo())
+        shown = {c.args[0] for c in flash.call_args_list} | {c.args[0] for c in hold.call_args_list if c.args[1]}
+        self.assertTrue({
+            "garage", "start_1", "start_2", "start_3", "start_4", "start_5", "lights_out",
+            "yellow", "yellow_clear", "safety_car", "green_flag", "vsc", "red_flag",
+            "pit", "penalty", "pb", "fastest", "chequered",
+        } <= shown, shown)
+        # The next tick sees an idle session and restores the room.
+        self.assertLessEqual(self.ha._last_packet, self.now - ha_lights.IDLE_SECONDS)
+
+    def test_demo_is_refused_while_the_game_is_live_or_lights_are_off(self):
+        self.ha._last_packet = self.now - 1
+        self.assertIn("telemetry", asyncio.run(self.async_start()))
+        self.ha._last_packet = 0.0
+        self.ha.configure(enabled=False)
+        self.assertIn("switched off", asyncio.run(self.async_start()))
+
+    async def async_start(self):
+        return self.ha.start_demo()
+
     def test_settings_survive_a_restart(self):
         import os, tempfile
         path = os.path.join(tempfile.mkdtemp(), "lights.json")

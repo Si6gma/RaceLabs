@@ -5,6 +5,7 @@ interface LightsState {
   configured: boolean;
   enabled: boolean;
   brightness: number;
+  testing: boolean;
 }
 
 // Header control for the room lamps: on/off, and a master brightness that
@@ -13,9 +14,17 @@ export default function LightsControl() {
   const [state, setState] = useState<LightsState | null>(null);
   const timer = useRef<number>();
 
+  const refresh = () => fetch('/api/lights').then(r => r.json()).then(setState).catch(() => {});
+
+  useEffect(() => { refresh(); }, []);
+
+  // While a test runs, follow it so the button comes back when it ends.
+  const testing = state?.testing ?? false;
   useEffect(() => {
-    fetch('/api/lights').then(r => r.json()).then(setState).catch(() => {});
-  }, []);
+    if (!testing) return;
+    const id = window.setInterval(refresh, 2000);
+    return () => window.clearInterval(id);
+  }, [testing]);
 
   if (!state?.configured) return null;
 
@@ -36,6 +45,11 @@ export default function LightsControl() {
     setState({ ...state, brightness });
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => post({ brightness }), 150);
+  };
+
+  const test = () => {
+    setState({ ...state, testing: true });
+    fetch('/api/lights/test', { method: 'POST' }).then(refresh).catch(() => {});
   };
 
   return (
@@ -67,6 +81,16 @@ export default function LightsControl() {
             {state.brightness}%
           </span>
         </label>
+      )}
+      {state.enabled && (
+        <button
+          onClick={test}
+          disabled={state.testing}
+          title="Cycle the lamps through every phase (about a minute). Not while the game is live."
+          className="px-2 py-1 border border-motorsport-border text-[11px] font-bold tracking-widest uppercase text-motorsport-dim hover:text-motorsport-muted hover:border-motorsport-muted/40 disabled:text-motorsport-orange disabled:border-motorsport-orange/40 disabled:cursor-wait transition-colors"
+        >
+          {state.testing ? 'TESTING' : 'TEST'}
+        </button>
       )}
     </div>
   );

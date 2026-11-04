@@ -47,6 +47,7 @@ class HALights:
         self._touched = False
         self._resend_at: Optional[float] = None
         self._failing = False
+        self._demo: Optional[asyncio.Task] = None
 
     def on_frame(self, frame: Dict[str, Any]):
         now = time.monotonic()
@@ -68,6 +69,37 @@ class HALights:
                     json.dump({"enabled": self.enabled, "brightness": self.brightness}, f)
             except OSError as e:
                 logger.warning(f"Race lights: could not save settings to {self._state_file}: {e}")
+
+    @property
+    def demo_running(self) -> bool:
+        return self._demo is not None and not self._demo.done()
+
+    def start_demo(self) -> Optional[str]:
+        """Play every phase on the lamps. Returns why not, or None when started."""
+        if not self.enabled:
+            return "the lights are switched off"
+        if self.demo_running:
+            return "a test is already running"
+        if self._last_packet and time.monotonic() - self._last_packet < 2.0:
+            return "the game is sending telemetry"
+        self._demo = asyncio.create_task(self._run_demo())
+        return None
+
+    async def _run_demo(self):
+        from app.lights_demo import STEPS
+        keepalive: Optional[Dict[str, Any]] = None
+        for seconds, frames in STEPS:
+            for frame in frames:
+                self.on_frame(frame)
+                if "lap" in frame:
+                    keepalive = frame
+            for _ in range(max(1, round(seconds / 0.5))):
+                await self._pause(0.5)
+                if keepalive:
+                    self.on_frame(keepalive)
+        # Over: let the next tick end the session and restore the room.
+        self.lights.reset()
+        self._last_packet = time.monotonic() - IDLE_SECONDS
 
     def _load(self):
         if not self._state_file or not os.path.exists(self._state_file):

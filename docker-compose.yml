@@ -27,6 +27,7 @@ services:
       - WS_PORT=8000
       # Home Assistant runs on the host network. The token comes from .env.lights.
       - HA_URL=http://host.docker.internal:8123
+      - LIGHTS_STATE_FILE=/app/state/lights.json
     env_file:
       - path: .env.lights
         required: false
@@ -38,6 +39,7 @@ services:
       - telemetry-net
     volumes:
       - ./backend/app:/app/app
+      - lights_state:/app/state
 
   postgres:
     image: timescale/timescaledb:latest-pg16
@@ -71,6 +73,7 @@ services:
 
 volumes:
   postgres_data:
+  lights_state:
 
 networks:
   telemetry-net:

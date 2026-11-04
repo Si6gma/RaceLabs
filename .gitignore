@@ -149,3 +149,6 @@ __pycache__/
 
 # Claude
 CLAUDE.md
+
+# Race lights on/off and brightness, written by the backend in local dev
+backend/lights_state.json

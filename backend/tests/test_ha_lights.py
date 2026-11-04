@@ -7,14 +7,16 @@ from app.ha_lights import HALights
 
 
 class FakeHA(HALights):
-    def __init__(self):
-        super().__init__("http://ha", "token", "light.left", "light.right")
+    def __init__(self, state_file=""):
+        super().__init__("http://ha", "token", "light.left", "light.right", state_file)
         self.calls = []
+        self.last_data = {}
         self.states = {"light.left": {"state": "off"}, "light.right": {"state": "off"}}
         self.scene_exists = False
 
     async def _call(self, domain, service, data):
         self.calls.append((domain, service, data.get("entity_id")))
+        self.last_data = data
 
     async def _scene_exists(self):
         return self.scene_exists
@@ -87,6 +89,58 @@ class ResendTest(unittest.TestCase):
         self.ha.on_frame({"player_car_index": 0, "event": {"code": "BUTN"}})
         self.assertEqual(self.tick(1000.0), [])
         self.assertFalse(self.ha._in_session)
+
+
+class ControlTest(unittest.TestCase):
+    def setUp(self):
+        self.ha = FakeHA()
+        self.now = 1000.0
+        patcher = mock.patch.object(ha_lights.time, "monotonic", lambda: self.now)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tick(self, at):
+        self.now = at
+        asyncio.run(self.ha._tick())
+        calls, self.ha.calls = self.ha.calls, []
+        return calls
+
+    def start_garage(self):
+        self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": True}})
+        self.tick(1000.0)
+        return self.tick(1000.2)
+
+    def test_master_brightness_scales_every_effect(self):
+        self.ha.configure(brightness=40)
+        self.start_garage()                                   # garage is 30%
+        self.assertEqual(self.ha.last_data["brightness_pct"], 12)
+
+    def test_changing_brightness_resends_what_is_showing(self):
+        self.start_garage()
+        self.assertEqual(self.tick(1000.4), [])
+        self.ha.configure(brightness=50)
+        self.assertEqual(len(self.tick(1000.6)), 1)
+        self.assertEqual(self.ha.last_data["brightness_pct"], 15)
+
+    def test_switching_off_restores_the_room_and_stays_quiet(self):
+        self.start_garage()
+        self.ha.configure(enabled=False)
+        self.assertEqual([c[:2] for c in self.tick(1000.4)],
+                         [("scene", "turn_on"), ("light", "turn_off"), ("light", "turn_off"), ("scene", "delete")])
+        self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": True}})
+        self.assertEqual(self.tick(1000.6), [])
+        self.assertFalse(self.ha._in_session)
+        self.ha.configure(enabled=True)
+        self.ha.on_frame({"player_car_index": 0, "lap": {"is_in_garage": True}})
+        self.assertEqual(self.tick(1000.8)[0][:2], ("scene", "create"))
+
+    def test_settings_survive_a_restart(self):
+        import os, tempfile
+        path = os.path.join(tempfile.mkdtemp(), "lights.json")
+        FakeHA(path).configure(enabled=False, brightness=35)
+        again = FakeHA(path)
+        self.assertFalse(again.enabled)
+        self.assertEqual(again.brightness, 35)
 
 
 if __name__ == "__main__":

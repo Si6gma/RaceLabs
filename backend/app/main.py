@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.database import init_db, get_db
@@ -23,6 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 settings = get_settings()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+lights: Optional[HALights] = None  # set in lifespan when Home Assistant is configured
 
 
 async def udp_handler(data: bytes):
@@ -40,9 +43,11 @@ async def lifespan(app: FastAPI):
     
     udp_task = asyncio.create_task(receiver.start(udp_handler))
 
+    global lights
     lights_task = None
     if settings.HA_URL and settings.HA_TOKEN:
-        lights = HALights(settings.HA_URL, settings.HA_TOKEN, settings.HA_LIGHT_LEFT, settings.HA_LIGHT_RIGHT)
+        lights = HALights(settings.HA_URL, settings.HA_TOKEN, settings.HA_LIGHT_LEFT, settings.HA_LIGHT_RIGHT,
+                          settings.LIGHTS_STATE_FILE)
         pipeline.add_listener(lights.on_frame)
         lights_task = asyncio.create_task(lights.run())
         logger.info(f"Race lights on: {settings.HA_LIGHT_LEFT}, {settings.HA_LIGHT_RIGHT}")
@@ -180,6 +185,26 @@ async def get_current_telemetry():
 async def get_telemetry_buffer(limit: int = 100):
     frames = list(pipeline.frame_buffer)[-limit:]
     return {"frames": frames, "count": len(frames)}
+
+
+class LightsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    brightness: Optional[int] = Field(None, ge=1, le=100)
+
+
+@app.get("/api/lights")
+async def get_lights():
+    if not lights:
+        return {"configured": False}
+    return {"configured": True, "enabled": lights.enabled, "brightness": lights.brightness}
+
+
+@app.post("/api/lights")
+async def set_lights(body: LightsUpdate):
+    if not lights:
+        raise HTTPException(status_code=404, detail="Race lights not configured")
+    lights.configure(enabled=body.enabled, brightness=body.brightness)
+    return await get_lights()
 
 
 @app.get("/api/recording/status")

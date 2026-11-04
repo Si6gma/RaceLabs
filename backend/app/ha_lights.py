@@ -7,6 +7,7 @@ slow or absent Home Assistant can never hold up telemetry.
 import asyncio
 import json
 import logging
+import os
 import time
 import urllib.request
 from typing import Any, Dict, Optional
@@ -29,11 +30,17 @@ def _request(req: urllib.request.Request):
 
 
 class HALights:
-    def __init__(self, url: str, token: str, left: str, right: str):
+    def __init__(self, url: str, token: str, left: str, right: str, state_file: str = ""):
         self.url = url.rstrip("/")
         self.token = token
         self.entities = (left, right)
         self.lights = RaceLights()
+        # Master switch and brightness, set from the dashboard and kept in a
+        # file so a reload or restart doesn't put the lamps back to full glare.
+        self.enabled = True
+        self.brightness = 100
+        self._state_file = state_file
+        self._load()
         self._last_packet = 0.0
         self._in_session = False
         self._sent: Optional[Look] = None
@@ -49,6 +56,30 @@ class HALights:
             self._last_packet = now
         self.lights.feed(frame, now)
 
+    def configure(self, enabled: Optional[bool] = None, brightness: Optional[int] = None):
+        if enabled is not None:
+            self.enabled = enabled
+        if brightness is not None:
+            self.brightness = min(100, max(1, brightness))
+            self._sent = None  # whatever is showing gets sent again at the new level
+        if self._state_file:
+            try:
+                with open(self._state_file, "w") as f:
+                    json.dump({"enabled": self.enabled, "brightness": self.brightness}, f)
+            except OSError as e:
+                logger.warning(f"Race lights: could not save settings to {self._state_file}: {e}")
+
+    def _load(self):
+        if not self._state_file or not os.path.exists(self._state_file):
+            return
+        try:
+            with open(self._state_file) as f:
+                saved = json.load(f)
+            self.enabled = bool(saved.get("enabled", True))
+            self.brightness = min(100, max(1, int(saved.get("brightness", 100))))
+        except (OSError, ValueError) as e:
+            logger.warning(f"Race lights: ignoring unreadable settings in {self._state_file}: {e}")
+
     async def run(self):
         while True:
             try:
@@ -60,7 +91,7 @@ class HALights:
     async def _tick(self):
         now = time.monotonic()
         if not self._in_session:
-            if self._last_packet and now - self._last_packet < IDLE_SECONDS:
+            if self.enabled and self._last_packet and now - self._last_packet < IDLE_SECONDS:
                 self._in_session = True
                 if await self._scene_exists():
                     # Left by a previous process that died mid-session (a code
@@ -77,7 +108,8 @@ class HALights:
                     })
             return
 
-        if now - self._last_packet >= IDLE_SECONDS:
+        # Switched off mid-session counts as the session ending: room lighting back.
+        if not self.enabled or now - self._last_packet >= IDLE_SECONDS:
             await self._restore(now)
             if self._resend_at is not None:
                 # The restore's repeat has to happen before the snapshot goes.
@@ -156,7 +188,8 @@ class HALights:
         else:
             r, g, b, pct = lamp
             await self._call("light", "turn_on", {
-                "entity_id": entity_ids, "rgb_color": [r, g, b], "brightness_pct": pct,
+                "entity_id": entity_ids, "rgb_color": [r, g, b],
+                "brightness_pct": max(1, round(pct * self.brightness / 100)),
             })
 
     async def _call(self, domain: str, service: str, data: Dict[str, Any]):

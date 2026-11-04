@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     HA_TOKEN: str = ""
     HA_LIGHT_LEFT: str = "light.left"
     HA_LIGHT_RIGHT: str = "light.right"
+    # Where the dashboard's on/off and brightness for the lamps are kept.
+    LIGHTS_STATE_FILE: str = "lights_state.json"
 
     class Config:
         env_file = ".env"

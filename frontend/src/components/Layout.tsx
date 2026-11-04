@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo, memo } from 'react';
 import { Activity, GitCompare, Table, BarChart3, Settings, Radio } from 'lucide-react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import CarSelector from '@/components/CarSelector';
+import LightsControl from '@/components/LightsControl';
 
 const navItems = [
   { path: '/',         label: 'Live',     icon: Activity   },
@@ -105,6 +106,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               REPLAY
             </span>
           )}
+
+          <LightsControl />
 
           <button
             onClick={toggleRecording}

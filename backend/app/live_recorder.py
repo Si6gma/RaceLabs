@@ -54,6 +54,9 @@ class FinalizedLap:
 class _LapInProgress:
     lap_number: int
     meta: Dict[str, Any]
+    # last_lap_time_ms as it stood when this lap began. On the final lap of a race
+    # the lap counter never advances, so a change here is the only completion signal.
+    start_last_lap_ms: int = 0
     samples: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -189,20 +192,27 @@ class LiveRecorder:
             self._recorded_laps = 0
         self._session_uid = uid
 
+        last_lap_ms = int(sample.get("last_lap_time_ms") or 0)
+        session_time = float(sample.get("session_time") or 0)
         current = self._current
         if current is None:
-            self._current = _LapInProgress(lap_num, dict(meta))
+            self._current = _LapInProgress(lap_num, dict(meta), last_lap_ms)
         elif lap_num == current.lap_number:
             current.meta = dict(meta)
+            # Chequered flag: the lap finished but the counter stayed put. The
+            # cruise afterwards starts a fresh in-progress lap that SEND discards.
+            if last_lap_ms > 0 and last_lap_ms != current.start_last_lap_ms and current.samples:
+                self._finish(current, last_lap_ms, session_time)
+                self._current = _LapInProgress(lap_num, dict(meta), last_lap_ms)
         elif lap_num == current.lap_number + 1:
-            self._finish(current, int(sample.get("last_lap_time_ms") or 0), float(sample.get("session_time") or 0))
-            self._current = _LapInProgress(lap_num, dict(meta))
+            self._finish(current, last_lap_ms, session_time)
+            self._current = _LapInProgress(lap_num, dict(meta), last_lap_ms)
         elif lap_num < current.lap_number:
             self._discard(f"lap number went from {current.lap_number} to {lap_num}")
-            self._current = _LapInProgress(lap_num, dict(meta))
+            self._current = _LapInProgress(lap_num, dict(meta), last_lap_ms)
         else:
             self._discard(f"lap number jumped from {current.lap_number} to {lap_num}")
-            self._current = _LapInProgress(lap_num, dict(meta))
+            self._current = _LapInProgress(lap_num, dict(meta), last_lap_ms)
 
         self._current.samples.append(sample)
 

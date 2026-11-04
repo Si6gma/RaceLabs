@@ -53,6 +53,19 @@ class RecorderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.rec.status()["recorded_laps"], 1)
         self.assertEqual(self.rec.status()["discarded"], 0)
 
+    async def test_final_lap_completes_when_last_lap_time_changes_without_lap_increment(self):
+        # Lap 5 of 5: the counter never reaches 6, but last_lap_time_ms updates at the line.
+        self.drive_lap(5, last_lap_time_ms=83000)
+        for i in range(10):
+            self.rec.on_sample(sample(5, 50 + i, last_lap_time_ms=82500), META)
+        self.rec.on_event("SEND")
+        await self.rec.drain()
+
+        self.assertEqual([lap.lap_number for lap in self.saved], [5])
+        self.assertEqual(self.saved[0].lap_time_ms, 82500)
+        self.assertEqual(len(self.saved[0].samples), 50)
+        self.assertEqual(self.rec.status()["discarded"], 1)
+
     async def test_sectors_from_last_sample_and_sector3_derived(self):
         self.drive_lap(1, sector1_ms=30000, sector2_ms=31000)
         self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)

@@ -1,16 +1,16 @@
 """
 Telemetry processing pipeline
-Handles buffering, aggregation, and storage
-Uses full UDP data to distinguish real laps from pits, garage, out laps, etc.
+Decodes packets, keeps a short frame buffer and a live session summary, and
+feeds the player's merged state to the live recorder lap by lap.
 """
 import asyncio
 import time
 import logging
 from collections import deque
-from typing import Dict, List, Any, Optional, Deque, Set
+from typing import Dict, List, Any, Optional, Deque
 from dataclasses import dataclass, field
 
-from app.decoder import TelemetryFrame, F1Decoder, DriverStatus, PitStatus, ResultStatus
+from app.decoder import F1Decoder, DriverStatus, PitStatus, ResultStatus
 
 logger = logging.getLogger(__name__)
 
@@ -18,122 +18,8 @@ logger = logging.getLogger(__name__)
 _MULTICAR_KEYS = frozenset({
     "motion_all", "lap_all", "telemetry_all", "status_all", "damage_all", "participants",
 })
-
-
-@dataclass
-class LapBuffer:
-    lap_number: int
-    frames: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=20000))
-    start_time: float = field(default_factory=time.time)
-    best_lap_time: Optional[int] = None
-    valid: bool = True
-    # Phase tracking
-    phases_seen: Set[str] = field(default_factory=set)
-    primary_phase: str = "unknown"
-    in_pit_frame_count: int = 0
-    garage_frame_count: int = 0
-    invalid_frame_count: int = 0
-    out_lap_frame_count: int = 0
-    flying_lap_frame_count: int = 0
-    in_lap_frame_count: int = 0
-    on_track_frame_count: int = 0
-    total_frames: int = 0
-    
-    _primary_phase_dirty: bool = field(default=True, repr=False)
-
-    def add_frame(self, frame: Dict[str, Any]):
-        self.frames.append(frame)
-        self.total_frames += 1
-        self._primary_phase_dirty = True
-        
-        lap_info = frame.get("lap", {})
-        phase = lap_info.get("lap_phase", "unknown")
-        self.phases_seen.add(phase)
-        
-        # Count frames by phase
-        if lap_info.get("is_in_pits"):
-            self.in_pit_frame_count += 1
-        if lap_info.get("is_in_garage"):
-            self.garage_frame_count += 1
-        if lap_info.get("current_lap_invalid"):
-            self.invalid_frame_count += 1
-            self.valid = False
-        if lap_info.get("is_out_lap"):
-            self.out_lap_frame_count += 1
-        if lap_info.get("is_on_flying_lap"):
-            self.flying_lap_frame_count += 1
-        if lap_info.get("is_in_lap"):
-            self.in_lap_frame_count += 1
-        if lap_info.get("is_on_track"):
-            self.on_track_frame_count += 1
-            
-        # Best lap time tracking
-        last_lap = lap_info.get("last_lap_time_ms", 0)
-        if last_lap > 0:
-            if self.best_lap_time is None or last_lap < self.best_lap_time:
-                self.best_lap_time = last_lap
-    
-    def _update_primary_phase(self):
-        """Determine the primary phase of this lap based on frame counts.
-        Called lazily when primary_phase is accessed."""
-        if not self._primary_phase_dirty:
-            return
-        counts = (
-            ("garage", self.garage_frame_count),
-            ("pitting", self.in_pit_frame_count),
-            ("out_lap", self.out_lap_frame_count),
-            ("flying_lap", self.flying_lap_frame_count),
-            ("in_lap", self.in_lap_frame_count),
-            ("on_track", self.on_track_frame_count),
-        )
-        max_count = -1
-        max_phase = "unknown"
-        for phase, count in counts:
-            if count > max_count:
-                max_count = count
-                max_phase = phase
-        self.primary_phase = max_phase
-        self._primary_phase_dirty = False
-    
-    @property
-    def is_timed_lap(self) -> bool:
-        """A timed lap is one that is primarily a flying lap or on-track race lap,
-        with minimal time in pits or garage."""
-        if self.total_frames == 0:
-            return False
-        
-        # Must have actual track time
-        track_frames = self.flying_lap_frame_count + self.on_track_frame_count
-        if track_frames == 0:
-            return False
-        
-        # Must not be mostly in pits/garage
-        non_track_frames = self.in_pit_frame_count + self.garage_frame_count
-        if non_track_frames / self.total_frames > 0.3:  # >30% in pits = not a timed lap
-            return False
-        
-        return True
-    
-    @property
-    def is_out_lap(self) -> bool:
-        self._update_primary_phase()
-        return self.primary_phase == "out_lap"
-    
-    @property
-    def is_in_lap(self) -> bool:
-        self._update_primary_phase()
-        return self.primary_phase == "in_lap"
-    
-    @property
-    def is_race_lap(self) -> bool:
-        self._update_primary_phase()
-        return self.primary_phase == "on_track"
-    
-    @property
-    def pit_time_ms(self) -> int:
-        """Estimated time spent in pits during this lap."""
-        # Rough estimate: ~50ms per frame at 20Hz
-        return self.in_pit_frame_count * 50
+# Player-car sub-dicts merged into the latest-state snapshot handed to the recorder.
+_PLAYER_KEYS = ("lap", "telemetry", "motion", "status", "session")
 
 
 @dataclass
@@ -145,12 +31,13 @@ class SessionState:
     current_lap: int = 0
     best_lap_time: Optional[int] = None
     total_laps: int = 0
-    lap_buffers: Dict[int, LapBuffer] = field(default_factory=dict)
     current_frame: Optional[Dict[str, Any]] = None
     is_active: bool = False
     weather: int = 0
     track_temp: int = 0
     air_temp: int = 0
+    track_id: int = -1
+    track_length: int = 0
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     # Player state tracking
@@ -158,52 +45,54 @@ class SessionState:
     pit_status: int = PitStatus.NONE
     in_pits: bool = False
     current_lap_invalid: bool = False
+    # True once any frame of the lap being driven was flagged invalid.
+    lap_invalid_seen: bool = False
     num_pit_stops: int = 0
     car_position: int = 0
     car_team_ids: List[int] = field(default_factory=list)
 
 
 class TelemetryPipeline:
-    def __init__(self, max_buffer_size: int = 1000):
+    def __init__(self, max_buffer_size: int = 1000, recorder=None):
         self.decoder = F1Decoder()
         self.frame_buffer: Deque[Dict[str, Any]] = deque(maxlen=max_buffer_size)
+        self.current_frame: Optional[Dict[str, Any]] = None
         self.session_state: Optional[SessionState] = None
-        self._sessions_history: List[SessionState] = []
+        self.recorder = recorder
+        self._player: Dict[str, Any] = {}
         self._listeners: List[Any] = []
         self._lock = asyncio.Lock()
-        self._running = False
         self._recording = False
-        self._replay_mode = False
-        self._replay_buffer: List[Dict[str, Any]] = []
-        self._replay_index = 0
-        self._replay_speed = 1.0
-        
+
+    def set_recorder(self, recorder):
+        self.recorder = recorder
+
     def add_listener(self, callback):
         self._listeners.append(callback)
-        
+
     def remove_listener(self, callback):
         if callback in self._listeners:
             self._listeners.remove(callback)
-            
+
     async def process_packet(self, data: bytes) -> Optional[Dict[str, Any]]:
         frame = self.decoder.decode_packet(data)
         if not frame:
             return None
-            
+
         frame.timestamp = time.time()
         frame_dict = self.decoder.frame_to_dict(frame)
         # Per-car arrays are only for live spectating over the WebSocket. Strip them
-        # before buffering/recording, which are player-focused, to avoid ~22x bloat.
+        # before buffering, which is player-focused, to avoid ~22x bloat.
         lean_dict = {k: v for k, v in frame_dict.items() if k not in _MULTICAR_KEYS}
 
         async with self._lock:
             self.frame_buffer.append(lean_dict)
             self.current_frame = frame_dict
-            
+
             if self.session_state is None:
                 self.session_state = SessionState(session_id=f"sess_{int(time.time())}")
                 self.session_state.is_active = True
-                
+
             if frame_dict.get("car_team_ids"):
                 self.session_state.car_team_ids = frame_dict["car_team_ids"]
 
@@ -211,58 +100,21 @@ class TelemetryPipeline:
             if self.session_state.car_team_ids and "car_team_ids" not in frame_dict:
                 frame_dict["car_team_ids"] = self.session_state.car_team_ids
 
+            self._player["session_uid"] = frame_dict.get("session_uid")
+            for key in _PLAYER_KEYS:
+                if key in frame_dict:
+                    self._player[key] = frame_dict[key]
+
             if "session" in frame_dict:
-                s = frame_dict["session"]
-                new_track = self._track_name(s.get("track_id", -1))
-                new_type = self._session_type_name(s.get("session_type", 0))
-                new_type_id = s.get("session_type", 0)
-                # Archive current session if track or session type changed
-                if self.session_state.track != "Unknown" and self.session_state.session_type != "Unknown":
-                    if (new_track != self.session_state.track or new_type != self.session_state.session_type):
-                        self._archive_session()
-                        self.session_state = SessionState(session_id=f"sess_{int(time.time())}")
-                self.session_state.track = new_track
-                self.session_state.session_type = new_type
-                self.session_state.session_type_id = new_type_id
-                self.session_state.total_laps = s.get("total_laps", 0)
-                self.session_state.weather = s.get("weather", 0)
-                self.session_state.track_temp = s.get("track_temperature", 0)
-                self.session_state.air_temp = s.get("air_temperature", 0)
-                self.session_state.updated_at = time.time()
-            
+                self._update_session(frame_dict["session"])
+
             if "lap" in frame_dict:
-                lap_info = frame_dict["lap"]
-                lap_num = lap_info.get("current_lap_num", 0)
-                
-                # Update session state from lap data
-                self.session_state.driver_status = lap_info.get("driver_status", DriverStatus.IN_GARAGE)
-                self.session_state.pit_status = lap_info.get("pit_status", PitStatus.NONE)
-                self.session_state.in_pits = lap_info.get("is_in_pits", False)
-                self.session_state.current_lap_invalid = lap_info.get("current_lap_invalid", False)
-                self.session_state.num_pit_stops = lap_info.get("num_pit_stops", 0)
-                self.session_state.car_position = lap_info.get("car_position", 0)
-                
-                # Only process frames for laps that are actually happening
-                # Skip completely invalid/inactive frames
-                result_status = lap_info.get("result_status", ResultStatus.INVALID)
-                if result_status in (ResultStatus.INVALID, ResultStatus.INACTIVE):
-                    # Still track current lap number but don't buffer
-                    if lap_num > 0:
-                        self.session_state.current_lap = lap_num
-                elif lap_num > 0:
-                    self.session_state.current_lap = lap_num
+                self._update_lap(frame_dict["lap"])
 
-                    if self._recording:
-                        if lap_num not in self.session_state.lap_buffers:
-                            self.session_state.lap_buffers[lap_num] = LapBuffer(lap_number=lap_num)
+            event_code = (frame_dict.get("event") or {}).get("code")
+            if event_code and self._recording and self.recorder:
+                self.recorder.on_event(event_code)
 
-                        self.session_state.lap_buffers[lap_num].add_frame(lean_dict)
-
-                        if self.session_state.lap_buffers[lap_num].best_lap_time:
-                            if self.session_state.best_lap_time is None or \
-                               self.session_state.lap_buffers[lap_num].best_lap_time < self.session_state.best_lap_time:
-                                self.session_state.best_lap_time = self.session_state.lap_buffers[lap_num].best_lap_time
-        
         for listener in self._listeners:
             try:
                 if asyncio.iscoroutinefunction(listener):
@@ -271,147 +123,122 @@ class TelemetryPipeline:
                     listener(frame_dict)
             except Exception as e:
                 logger.error(f"Listener error: {e}")
-                
+
         return frame_dict
-        
+
+    def _update_session(self, s: Dict[str, Any]):
+        state = self.session_state
+        new_track = self._track_name(s.get("track_id", -1))
+        new_type = self._session_type_name(s.get("session_type", 0))
+        # Start a fresh summary if track or session type changed
+        if state.track != "Unknown" and state.session_type != "Unknown":
+            if new_track != state.track or new_type != state.session_type:
+                state.is_active = False
+                state = self.session_state = SessionState(session_id=f"sess_{int(time.time())}")
+                state.is_active = True
+        state.track = new_track
+        state.track_id = s.get("track_id", -1)
+        state.track_length = s.get("track_length", 0)
+        state.session_type = new_type
+        state.session_type_id = s.get("session_type", 0)
+        state.total_laps = s.get("total_laps", 0)
+        state.weather = s.get("weather", 0)
+        state.track_temp = s.get("track_temperature", 0)
+        state.air_temp = s.get("air_temperature", 0)
+        state.updated_at = time.time()
+
+    def _update_lap(self, lap_info: Dict[str, Any]):
+        state = self.session_state
+        lap_num = lap_info.get("current_lap_num", 0)
+
+        state.driver_status = lap_info.get("driver_status", DriverStatus.IN_GARAGE)
+        state.pit_status = lap_info.get("pit_status", PitStatus.NONE)
+        state.in_pits = lap_info.get("is_in_pits", False)
+        state.current_lap_invalid = lap_info.get("current_lap_invalid", False)
+        state.num_pit_stops = lap_info.get("num_pit_stops", 0)
+        state.car_position = lap_info.get("car_position", 0)
+
+        if lap_num <= 0:
+            return
+
+        if lap_num != state.current_lap:
+            # The lap just finished: its time arrives as last_lap_time_ms on the new lap.
+            if lap_num == state.current_lap + 1 and state.current_lap > 0 and not state.lap_invalid_seen:
+                last = lap_info.get("last_lap_time_ms", 0)
+                if last > 0 and (state.best_lap_time is None or last < state.best_lap_time):
+                    state.best_lap_time = last
+            state.current_lap = lap_num
+            state.lap_invalid_seen = False
+        state.lap_invalid_seen = state.lap_invalid_seen or state.current_lap_invalid
+
+        result_status = lap_info.get("result_status", ResultStatus.INVALID)
+        if result_status in (ResultStatus.INVALID, ResultStatus.INACTIVE):
+            return
+
+        if self._recording and self.recorder:
+            self.recorder.on_sample(self._player_sample(lap_info), self._recorder_meta())
+
+    def _player_sample(self, lap: Dict[str, Any]) -> Dict[str, Any]:
+        tel = self._player.get("telemetry") or {}
+        motion = self._player.get("motion") or {}
+        status = self._player.get("status") or {}
+        return {
+            "session_time": (self.current_frame or {}).get("session_time", 0.0),
+            "lap_num": lap.get("current_lap_num", 0),
+            "lap_distance": lap.get("lap_distance", 0.0),
+            "total_distance": lap.get("total_distance", 0.0),
+            "current_lap_time_ms": lap.get("current_lap_time_ms", 0),
+            "sector": lap.get("sector", 0),
+            "current_lap_invalid": bool(lap.get("current_lap_invalid", False)),
+            "driver_status": lap.get("driver_status", 0),
+            "pit_status": lap.get("pit_status", 0),
+            "result_status": lap.get("result_status", 0),
+            "sector1_ms": lap.get("sector1_time_minutes", 0) * 60000 + lap.get("sector1_time_ms", 0),
+            "sector2_ms": lap.get("sector2_time_minutes", 0) * 60000 + lap.get("sector2_time_ms", 0),
+            "last_lap_time_ms": lap.get("last_lap_time_ms", 0),
+            "speed": tel.get("speed", 0),
+            "throttle": tel.get("throttle", 0.0),
+            "brake": tel.get("brake", 0.0),
+            "steer": tel.get("steer", 0.0),
+            "gear": tel.get("gear", 0),
+            "rpm": tel.get("engine_rpm", 0),
+            "drs": tel.get("drs", 0),
+            "ers_store_energy": status.get("ers_store_energy", 0.0),
+            "g_force_lat": motion.get("g_force_lat", 0.0),
+            "g_force_lon": motion.get("g_force_lon", 0.0),
+            "g_force_vert": motion.get("g_force_vert", 0.0),
+            "world_pos_x": motion.get("world_pos_x", 0.0),
+            "world_pos_y": motion.get("world_pos_y", 0.0),
+            "world_pos_z": motion.get("world_pos_z", 0.0),
+            "car_position": lap.get("car_position", 0),
+            "tyre_compound": status.get("tyre_compound", 0),
+        }
+
+    def _recorder_meta(self) -> Dict[str, Any]:
+        state = self.session_state
+        return {
+            "session_uid": self._player.get("session_uid"),
+            "track_id": state.track_id,
+            "track": state.track,
+            "track_length": state.track_length,
+            "session_type_id": state.session_type_id,
+            "session_type": state.session_type,
+            "total_laps": state.total_laps,
+            "weather": state.weather,
+            "track_temp": state.track_temp,
+            "air_temp": state.air_temp,
+        }
+
     def get_current_frame(self) -> Optional[Dict[str, Any]]:
-        return getattr(self, 'current_frame', None)
-        
-    def get_lap_data(self, lap_number: int) -> List[Dict[str, Any]]:
-        if self.session_state and lap_number in self.session_state.lap_buffers:
-            return list(self.session_state.lap_buffers[lap_number].frames)
-        return []
-        
-    def get_all_laps(self) -> Dict[int, List[Dict[str, Any]]]:
-        if not self.session_state:
-            return {}
-        return {k: list(v.frames) for k, v in self.session_state.lap_buffers.items()}
-    
-    def get_lap_summary(self, lap_number: int) -> Optional[Dict[str, Any]]:
-        """Get summary info for a specific lap."""
-        if not self.session_state or lap_number not in self.session_state.lap_buffers:
-            return None
-        buf = self.session_state.lap_buffers[lap_number]
-        buf._update_primary_phase()
-        return {
-            "lap_number": lap_number,
-            "frame_count": buf.total_frames,
-            "valid": buf.valid,
-            "primary_phase": buf.primary_phase,
-            "phases_seen": list(buf.phases_seen),
-            "is_timed_lap": buf.is_timed_lap,
-            "is_out_lap": buf.is_out_lap,
-            "is_in_lap": buf.is_in_lap,
-            "is_race_lap": buf.is_race_lap,
-            "best_lap_time_ms": buf.best_lap_time,
-            "in_pit_frames": buf.in_pit_frame_count,
-            "garage_frames": buf.garage_frame_count,
-            "flying_lap_frames": buf.flying_lap_frame_count,
-            "on_track_frames": buf.on_track_frame_count,
-        }
-    
-    def get_timed_laps(self) -> Dict[int, List[Dict[str, Any]]]:
-        """Get only timed laps (flying laps / on-track race laps), excluding out laps, in laps, and pit time."""
-        if not self.session_state:
-            return {}
-        return {
-            k: list(v.frames)
-            for k, v in self.session_state.lap_buffers.items()
-            if v.is_timed_lap
-        }
-    
-    def get_current_lap_phase(self) -> str:
-        """Get the current lap phase."""
-        if not self.session_state:
-            return "unknown"
-        frame = self.get_current_frame()
-        if frame and "lap" in frame:
-            return frame["lap"].get("lap_phase", "unknown")
-        return "unknown"
-        
+        return self.current_frame
+
     def get_session_summary(self) -> Dict[str, Any]:
         if not self.session_state:
             return {}
         return self._session_to_dict(self.session_state, active=True)
 
-    def get_all_sessions(self) -> List[Dict[str, Any]]:
-        sessions = []
-        for s in reversed(self._sessions_history):
-            sessions.append(self._session_to_dict(s, active=False))
-        if self.session_state and self.session_state.is_active:
-            sessions.insert(0, self._session_to_dict(self.session_state, active=True))
-        return sessions
-
-    def get_session_data(self, session_id: str) -> Optional[Dict[str, Any]]:
-        target = None
-        if self.session_state and self.session_state.session_id == session_id:
-            target = self.session_state
-        else:
-            for s in self._sessions_history:
-                if s.session_id == session_id:
-                    target = s
-                    break
-        if not target:
-            return None
-        
-        # Ensure primary phases are computed
-        for buf in target.lap_buffers.values():
-            buf._update_primary_phase()
-        
-        return {
-            "session_id": target.session_id,
-            "track": target.track,
-            "session_type": target.session_type,
-            "created_at": target.created_at,
-            "frames": [
-                frame
-                for lap in sorted(target.lap_buffers.keys())
-                for frame in target.lap_buffers[lap].frames
-            ],
-            "laps": {
-                lap_num: {
-                    "lap_number": lap_num,
-                    "frame_count": buf.total_frames,
-                    "best_lap_time": buf.best_lap_time,
-                    "valid": buf.valid,
-                    "primary_phase": buf.primary_phase,
-                    "phases_seen": list(buf.phases_seen),
-                    "is_timed_lap": buf.is_timed_lap,
-                    "in_pit_frames": buf.in_pit_frame_count,
-                    "garage_frames": buf.garage_frame_count,
-                    "flying_lap_frames": buf.flying_lap_frame_count,
-                    "on_track_frames": buf.on_track_frame_count,
-                }
-                for lap_num, buf in target.lap_buffers.items()
-            },
-        }
-
-    def clear_session(self, session_id: str) -> bool:
-        if self.session_state and self.session_state.session_id == session_id:
-            self.session_state = None
-            return True
-        for i, s in enumerate(self._sessions_history):
-            if s.session_id == session_id:
-                self._sessions_history.pop(i)
-                return True
-        return False
-
-    def _archive_session(self):
-        if self.session_state:
-            self.session_state.is_active = False
-            self._sessions_history.append(self.session_state)
-            # Keep only last 50 sessions
-            if len(self._sessions_history) > 50:
-                self._sessions_history = self._sessions_history[-50:]
-
-    @staticmethod
-    def _session_to_dict(session: SessionState, active: bool = False) -> Dict[str, Any]:
-        total_frames = sum(buf.total_frames for buf in session.lap_buffers.values())
-        timed_laps = sum(1 for buf in session.lap_buffers.values() if buf.is_timed_lap)
-        out_laps = sum(1 for buf in session.lap_buffers.values() if buf.is_out_lap)
-        in_laps = sum(1 for buf in session.lap_buffers.values() if buf.is_in_lap)
-        pit_laps = sum(1 for buf in session.lap_buffers.values() if buf.in_pit_frame_count > 0)
-        
+    def _session_to_dict(self, session: SessionState, active: bool = False) -> Dict[str, Any]:
+        recorded_laps = self.recorder.status()["recorded_laps"] if self.recorder else 0
         return {
             "session_id": session.session_id,
             "track": session.track,
@@ -422,14 +249,7 @@ class TelemetryPipeline:
             "weather": session.weather,
             "track_temp": session.track_temp,
             "air_temp": session.air_temp,
-            "lap_count": len(session.lap_buffers),
-            # Laps with frames that are over, i.e. not the one still being driven
-            "recorded_laps": sum(1 for n in session.lap_buffers if n < session.current_lap),
-            "timed_lap_count": timed_laps,
-            "out_lap_count": out_laps,
-            "in_lap_count": in_laps,
-            "pit_lap_count": pit_laps,
-            "total_frame_count": total_frames,
+            "recorded_laps": recorded_laps,
             "driver_status": session.driver_status,
             "pit_status": session.pit_status,
             "in_pits": session.in_pits,
@@ -440,35 +260,21 @@ class TelemetryPipeline:
             "updated_at": session.updated_at,
             "status": "active" if active else "completed",
         }
-        
+
     @property
     def is_recording(self) -> bool:
         return self._recording
 
     def start_recording(self):
+        if self.recorder:
+            self.recorder.start()
         self._recording = True
 
     def stop_recording(self):
         self._recording = False
+        if self.recorder:
+            self.recorder.stop()
 
-    def start_replay(self, lap_data: List[Dict[str, Any]], speed: float = 1.0):
-        self._replay_mode = True
-        self._replay_buffer = lap_data
-        self._replay_index = 0
-        self._replay_speed = speed
-        
-    def stop_replay(self):
-        self._replay_mode = False
-        self._replay_buffer = []
-        self._replay_index = 0
-        
-    def get_replay_frame(self) -> Optional[Dict[str, Any]]:
-        if not self._replay_mode or self._replay_index >= len(self._replay_buffer):
-            return None
-        frame = self._replay_buffer[self._replay_index]
-        self._replay_index += 1
-        return frame
-        
     @staticmethod
     def _track_name(track_id: int) -> str:
         tracks = {
@@ -481,7 +287,7 @@ class TelemetryPipeline:
             29: "Jeddah", 30: "Miami", 31: "Las Vegas", 32: "Losail",
         }
         return tracks.get(track_id, f"Track_{track_id}")
-        
+
     @staticmethod
     def _session_type_name(session_type: int) -> str:
         types = {

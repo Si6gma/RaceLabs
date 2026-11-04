@@ -15,7 +15,7 @@ export function useWebSocket() {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const flushIntervalRef = useRef<ReturnType<typeof setInterval>>();
   const pendingFrameRef = useRef<Partial<TelemetryFrame> | null>(null);
-  const { setConnected, setConnecting, setCurrentFrame, setSession, setLaps, setReplayMode } = useTelemetryStore();
+  const { setConnected, setConnecting, setCurrentFrame, setSession, setReplayMode } = useTelemetryStore();
 
   // Flush pending merged frames to the store at a capped rate.
   const startFlushLoop = useCallback(() => {
@@ -86,12 +86,6 @@ export function useWebSocket() {
             };
           } else if (msg.type === 'session') {
             setSession(msg.data as unknown as Parameters<typeof setSession>[0]);
-          } else if (msg.type === 'laps') {
-            const laps: Record<number, { lap_number: number; lap_time_ms: number; sector1_ms: number; sector2_ms: number; valid: boolean; frame_count: number }> = {};
-            for (const [k, v] of Object.entries(msg.data as Record<string, unknown>)) {
-              laps[Number(k)] = { lap_number: Number(k), lap_time_ms: 0, sector1_ms: 0, sector2_ms: 0, valid: true, frame_count: v as number };
-            }
-            setLaps(laps);
           } else if (msg.type === 'replay_started') {
             setReplayMode(true);
           } else if (msg.type === 'replay_stopped') {
@@ -119,7 +113,7 @@ export function useWebSocket() {
       setConnecting(false);
       reconnectTimeoutRef.current = setTimeout(connect, 3000);
     }
-  }, [setConnected, setConnecting, setCurrentFrame, setSession, setLaps, setReplayMode]);
+  }, [setConnected, setConnecting, setCurrentFrame, setSession, setReplayMode]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {

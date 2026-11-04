@@ -104,7 +104,7 @@ function TimingTower() {
     <div className="telemetry-panel flex flex-col h-full overflow-hidden">
       <CarSelector />
 
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden divide-y divide-motorsport-border">
+      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto overflow-x-hidden divide-y divide-motorsport-border">
         {/* P10 on the left; the running lap time over the lap count on the right */}
         <div className="px-3 py-3 flex items-end justify-between shrink-0">
           <div className="flex items-end gap-2">
@@ -186,9 +186,9 @@ function TimingTower() {
 
         {/* DRS: one box whose outline says it all. Solid green = open,
             dashed green = can be opened, quiet = closed. */}
-        <div className="mt-auto p-3">
+        <div className="mt-auto p-3 shrink-0">
           <div
-            className="h-11 flex items-center justify-center border-2 text-[16px] font-bold tracking-wide uppercase transition-colors"
+            className="h-11 shrink-0 flex items-center justify-center border-2 text-[16px] font-bold tracking-wide uppercase transition-colors"
             style={{
               borderStyle:     drsAllowed && !drsActive ? 'dashed' : 'solid',
               borderColor:     drsActive || drsAllowed ? '#00E85A' : '#2A3745',

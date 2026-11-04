@@ -13,9 +13,10 @@ from fastapi.responses import StreamingResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.database import init_db, get_db
+from app.database import init_db, get_db, async_session
 from app.websocket import manager
 from app.telemetry import pipeline
+from app.live_recorder import LiveRecorder
 from app.udp_receiver import receiver
 from app.ha_lights import HALights
 from app.csv_import_service import CSVImportService
@@ -26,6 +27,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 lights: Optional[HALights] = None  # set in lifespan when Home Assistant is configured
+recorder = LiveRecorder(async_session)
+pipeline.set_recorder(recorder)
 
 
 async def udp_handler(data: bytes):
@@ -55,6 +58,8 @@ async def lifespan(app: FastAPI):
     yield
     
     receiver.stop()
+    pipeline.stop_recording()
+    await recorder.drain()
     udp_task.cancel()
     if lights_task:
         lights_task.cancel()
@@ -93,60 +98,6 @@ async def health():
 @app.get("/api/session")
 async def get_session():
     return pipeline.get_session_summary()
-
-
-@app.get("/api/session/laps")
-async def get_laps():
-    laps = pipeline.get_all_laps()
-    summary = {}
-    for lap_num, frames in laps.items():
-        if not frames:
-            continue
-        # Use the new lap summary method if available
-        lap_summary = pipeline.get_lap_summary(lap_num)
-        if lap_summary:
-            summary[lap_num] = lap_summary
-        else:
-            last_frame = frames[-1]
-            lap_data = last_frame.get("lap", {})
-            summary[lap_num] = {
-                "lap_number": lap_num,
-                "lap_time_ms": lap_data.get("last_lap_time_ms", 0),
-                "sector1_ms": lap_data.get("sector1_time_ms", 0),
-                "sector2_ms": lap_data.get("sector2_time_ms", 0),
-                "valid": not any(f.get("lap", {}).get("current_lap_invalid", False) for f in frames),
-                "frame_count": len(frames),
-            }
-    return summary
-
-
-@app.get("/api/session/laps/{lap_number}")
-async def get_lap_data(lap_number: int):
-    data = pipeline.get_lap_data(lap_number)
-    if not data:
-        raise HTTPException(status_code=404, detail="Lap not found")
-    summary = pipeline.get_lap_summary(lap_number)
-    return {"lap_number": lap_number, "summary": summary, "frames": data}
-
-
-@app.get("/api/session/laps/{lap_number}/summary")
-async def get_lap_summary_endpoint(lap_number: int):
-    summary = pipeline.get_lap_summary(lap_number)
-    if not summary:
-        raise HTTPException(status_code=404, detail="Lap not found")
-    return summary
-
-
-@app.get("/api/session/timed-laps")
-async def get_timed_laps():
-    """Get only timed laps (flying laps / on-track race laps), excluding out laps, in laps, and pit time."""
-    laps = pipeline.get_timed_laps()
-    summary = {}
-    for lap_num, frames in laps.items():
-        lap_summary = pipeline.get_lap_summary(lap_num)
-        if lap_summary:
-            summary[lap_num] = lap_summary
-    return summary
 
 
 @app.get("/api/telemetry/current/phase")
@@ -219,62 +170,25 @@ async def test_lights():
     return await get_lights()
 
 
+def _recording_status() -> Dict[str, Any]:
+    return {**recorder.status(), "recording": pipeline.is_recording}
+
+
 @app.get("/api/recording/status")
 async def get_recording_status():
-    return {"recording": pipeline.is_recording}
+    return _recording_status()
 
 
 @app.post("/api/recording/start")
 async def start_recording():
     pipeline.start_recording()
-    return {"recording": True}
+    return _recording_status()
 
 
 @app.post("/api/recording/stop")
 async def stop_recording():
     pipeline.stop_recording()
-    return {"recording": False}
-
-
-@app.post("/api/replay/start")
-async def start_replay(lap_number: int, speed: float = 1.0):
-    data = pipeline.get_lap_data(lap_number)
-    if not data:
-        raise HTTPException(status_code=404, detail="Lap not found")
-    pipeline.start_replay(data, speed)
-    return {"status": "started", "lap_number": lap_number, "frame_count": len(data)}
-
-
-@app.post("/api/replay/stop")
-async def stop_replay():
-    pipeline.stop_replay()
-    return {"status": "stopped"}
-
-
-# ============================================================================
-# SESSION ENDPOINTS
-# ============================================================================
-
-@app.get("/api/sessions")
-async def get_sessions():
-    return {"sessions": pipeline.get_all_sessions()}
-
-
-@app.get("/api/sessions/{session_id}")
-async def get_live_session(session_id: str):
-    """Get a single live session with its frames and laps."""
-    data = pipeline.get_session_data(session_id)
-    if not data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return data
-
-
-@app.get("/api/sessions/{session_id}/export")
-async def export_session(session_id: str):
-    data = pipeline.get_session_data(session_id)
-    if not data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return data
+    return _recording_status()
 
 
 # ============================================================================
@@ -358,38 +272,6 @@ async def get_session_telemetry(
     return data
 
 
-@app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str):
-    if pipeline.clear_session(session_id):
-        return {"status": "deleted", "session_id": session_id}
-    raise HTTPException(status_code=404, detail="Session not found")
-
-
-@app.post("/api/sessions/{session_id}/replay")
-async def replay_session(session_id: str, lap_number: Optional[int] = None):
-    data = pipeline.get_session_data(session_id)
-    if not data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    laps = data.get("laps", {})
-    if not laps:
-        raise HTTPException(status_code=400, detail="No laps in session")
-    # If no lap specified, pick best lap or last lap
-    target_lap = lap_number
-    if target_lap is None:
-        best = None
-        best_time = float('inf')
-        for num, lap in laps.items():
-            if lap.get("best_lap_time") and lap["best_lap_time"] < best_time:
-                best_time = lap["best_lap_time"]
-                best = num
-        target_lap = best if best is not None else max(laps.keys())
-    lap_data = pipeline.get_lap_data(target_lap)
-    if not lap_data:
-        raise HTTPException(status_code=404, detail="Lap not found")
-    pipeline.start_replay(lap_data, 1.0)
-    return {"status": "started", "session_id": session_id, "lap_number": target_lap}
-
-
 @app.get("/api/import/laps/{lap_id}/telemetry")
 async def get_lap_telemetry(lap_id: str, db: AsyncSession = Depends(get_db)):
     """Get telemetry samples for a specific lap."""
@@ -469,29 +351,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "session",
                         "data": pipeline.get_session_summary()
                     })
-                    
-                elif action == "get_laps":
-                    laps = pipeline.get_all_laps()
-                    await websocket.send_json({
-                        "type": "laps",
-                        "data": {k: len(v) for k, v in laps.items()}
-                    })
-                    
-                elif action == "start_replay":
-                    lap_num = data.get("lap_number")
-                    speed = data.get("speed", 1.0)
-                    lap_data = pipeline.get_lap_data(lap_num)
-                    if lap_data:
-                        pipeline.start_replay(lap_data, speed)
-                        await websocket.send_json({
-                            "type": "replay_started",
-                            "lap_number": lap_num,
-                            "frame_count": len(lap_data)
-                        })
-                        
-                elif action == "stop_replay":
-                    pipeline.stop_replay()
-                    await websocket.send_json({"type": "replay_stopped"})
                     
                 else:
                     await websocket.send_json({"type": "error", "message": "Unknown action"})

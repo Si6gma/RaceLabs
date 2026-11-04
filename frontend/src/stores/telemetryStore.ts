@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TelemetryFrame, SessionSummary, LapSummary, ImportedSession, ImportedLap, ParticipantInfo } from '@/types/telemetry';
+import type { TelemetryFrame, SessionSummary, ImportedSession, ParticipantInfo } from '@/types/telemetry';
 
 // Project a car's per-slot data into the flat frame shape the panels already read.
 // `carIndex` picks which of the 22 slots becomes the top-level motion/lap/telemetry/etc.
@@ -44,38 +44,27 @@ interface TelemetryState {
   participants:     ParticipantInfo[];
 
   session:  SessionSummary | null;
-  laps:     Record<number, LapSummary>;
 
-  importedSessions:        ImportedSession[];
-  selectedImportedSession: ImportedSession | null;
-  importedLaps:            ImportedLap[];
+  importedSessions: ImportedSession[];
 
   connected:  boolean;
   connecting: boolean;
   replayMode: boolean;
   recording:  boolean;
 
-  selectedLaps: number[];
-  compareLaps:  number[];
   importModalOpen: boolean;
 
   // Actions
   setCurrentFrame:           (frame: TelemetryFrame) => void;
   setSelectedCarIndex:       (index: number | null) => void;
   setSession:                (session: SessionSummary) => void;
-  setLaps:                   (laps: Record<number, LapSummary>) => void;
   setConnected:              (connected: boolean) => void;
   setConnecting:             (connecting: boolean) => void;
   setReplayMode:             (replay: boolean) => void;
   setRecording:              (recording: boolean) => void;
-  selectLap:                 (lap: number) => void;
-  deselectLap:               (lap: number) => void;
-  toggleCompareLap:          (lap: number) => void;
   clearHistory:              () => void;
   setImportedSessions:       (sessions: ImportedSession[]) => void;
   addImportedSession:        (session: ImportedSession) => void;
-  setSelectedImportedSession:(session: ImportedSession | null) => void;
-  setImportedLaps:           (laps: ImportedLap[]) => void;
   removeImportedSession:     (id: string) => void;
   setImportModalOpen:        (open: boolean) => void;
 }
@@ -88,16 +77,11 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   selectedCarIndex:        null,
   participants:            [],
   session:                 null,
-  laps:                    {},
   importedSessions:        [],
-  selectedImportedSession: null,
-  importedLaps:            [],
   connected:               false,
   connecting:              false,
   replayMode:              false,
   recording:               false,
-  selectedLaps:            [],
-  compareLaps:             [],
   importModalOpen:         false,
 
   setCurrentFrame: (frame) => {
@@ -150,27 +134,10 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   },
 
   setSession:   (session)   => set({ session }),
-  setLaps:      (laps)      => set({ laps }),
   setConnected: (connected) => set({ connected }),
   setConnecting:(connecting)=> set({ connecting }),
   setReplayMode:(replayMode)=> set({ replayMode }),
   setRecording: (recording) => set({ recording }),
-
-  selectLap: (lap) => {
-    const { selectedLaps } = get();
-    if (!selectedLaps.includes(lap)) set({ selectedLaps: [...selectedLaps, lap] });
-  },
-  deselectLap: (lap) => {
-    set({ selectedLaps: get().selectedLaps.filter(l => l !== lap) });
-  },
-  toggleCompareLap: (lap) => {
-    const { compareLaps } = get();
-    if (compareLaps.includes(lap)) {
-      set({ compareLaps: compareLaps.filter(l => l !== lap) });
-    } else if (compareLaps.length < 4) {
-      set({ compareLaps: [...compareLaps, lap] });
-    }
-  },
 
   clearHistory: () => {
     clearFrameHistory();
@@ -179,8 +146,6 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
 
   setImportedSessions:        (sessions) => set({ importedSessions: sessions }),
   addImportedSession:         (session)  => set({ importedSessions: [session, ...get().importedSessions] }),
-  setSelectedImportedSession: (session)  => set({ selectedImportedSession: session }),
-  setImportedLaps:            (laps)     => set({ importedLaps: laps }),
   removeImportedSession:      (id)       => set({ importedSessions: get().importedSessions.filter(s => s.id !== id) }),
   setImportModalOpen:         (open)     => set({ importModalOpen: open }),
 }));

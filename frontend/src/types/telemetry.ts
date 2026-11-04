@@ -180,7 +180,12 @@ export interface ImportedLap {
   lap_number: number;
   lap_index: number;
   lap_time_ms?: number;
+  sector1_ms?: number;
+  sector2_ms?: number;
+  sector3_ms?: number;
   valid: boolean;
+  partial?: boolean;
+  pit_lap?: boolean;
   valid_bin_count: number;
   total_bin_count: number;
   max_speed: number;

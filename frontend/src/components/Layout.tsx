@@ -1,15 +1,13 @@
 import { NavLink } from 'react-router-dom';
 import { useEffect, useState, useMemo, memo } from 'react';
-import { Activity, GitCompare, Table, BarChart3, Settings, Radio } from 'lucide-react';
+import { Activity, History, Settings, Radio } from 'lucide-react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import LightsControl from '@/components/LightsControl';
 
 const navItems = [
-  { path: '/',         label: 'Live',     icon: Activity   },
-  { path: '/compare',  label: 'Compare',  icon: GitCompare },
-  { path: '/sessions', label: 'Sessions', icon: Table      },
-  { path: '/stats',    label: 'Analytics',icon: BarChart3  },
-  { path: '/setup',    label: 'Config',   icon: Settings   },
+  { path: '/',         label: 'Live',     icon: Activity },
+  { path: '/recorded', label: 'Recorded', icon: History  },
+  { path: '/setup',    label: 'Config',   icon: Settings },
 ];
 
 type GameStatus = 'offline' | 'no_game' | 'garage' | 'on_track';

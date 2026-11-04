@@ -283,21 +283,29 @@ class CSVImportService:
             "best_lap_time_ms": session.best_lap_time_ms,
             "status": session.status,
             "extra_data": session.extra_data,
-            "laps": [
-                {
-                    "id": str(lap.id),
-                    "lap_number": lap.lap_number,
-                    "lap_index": lap.lap_index,
-                    "lap_time_ms": lap.lap_time_ms,
-                    "valid": lap.valid,
-                    "valid_bin_count": lap.valid_bin_count,
-                    "total_bin_count": lap.total_bin_count,
-                    "max_speed": lap.max_speed,
-                    "avg_speed": lap.avg_speed,
-                    "min_speed": lap.min_speed,
-                }
-                for lap in laps
-            ],
+            "laps": [self._lap_to_dict(lap) for lap in laps],
+        }
+
+    @staticmethod
+    def _lap_to_dict(lap: ImportedLap) -> Dict[str, Any]:
+        extra = lap.extra_data or {}
+        return {
+            "id": str(lap.id),
+            "lap_number": lap.lap_number,
+            "lap_index": lap.lap_index,
+            "lap_time_ms": lap.lap_time_ms,
+            "sector1_ms": lap.sector1_ms,
+            "sector2_ms": lap.sector2_ms,
+            "sector3_ms": lap.sector3_ms,
+            "valid": bool(lap.valid),
+            "partial": bool(extra.get("partial_start", False)),
+            "pit_lap": bool(extra.get("pit_lap", extra.get("is_pit_lap", False))),
+            "valid_bin_count": lap.valid_bin_count,
+            "total_bin_count": lap.total_bin_count,
+            "max_speed": lap.max_speed,
+            "avg_speed": lap.avg_speed,
+            "min_speed": lap.min_speed,
+            "extra_data": extra,
         }
     
     async def get_lap_telemetry(self, lap_id: str) -> List[Dict[str, Any]]:

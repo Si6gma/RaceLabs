@@ -261,6 +261,7 @@ class SessionData:
 @dataclass
 class TelemetryFrame:
     packet_id: int = 0
+    session_uid: int = 0
     session_time: float = 0.0
     frame_identifier: int = 0
     overall_frame_identifier: int = 0
@@ -326,6 +327,7 @@ class F1Decoder:
 
             frame = TelemetryFrame(
                 packet_id=packet_type,
+                session_uid=session_uid,
                 session_time=session_time,
                 frame_identifier=frame_id,
                 overall_frame_identifier=overall_frame_id,
@@ -767,6 +769,7 @@ class F1Decoder:
     def frame_to_dict(self, frame: TelemetryFrame) -> Dict[str, Any]:
         result = {
             "packet_id": frame.packet_id,
+            "session_uid": frame.session_uid,
             "session_time": frame.session_time,
             "frame_identifier": frame.frame_identifier,
             "overall_frame_identifier": frame.overall_frame_identifier,

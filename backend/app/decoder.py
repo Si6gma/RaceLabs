@@ -607,8 +607,9 @@ class F1Decoder:
             d7 = struct.unpack_from('<2H', data, offset + 9)    # 9-12 (session_time_left, session_duration)
             d8 = struct.unpack_from('<5B', data, offset + 13)   # 13-17 (pit_speed_limit, game_paused, is_spectating, spectator_car_index, sli_pro_native_support)
             d9 = struct.unpack_from('<B', data, offset + 18)    # 18 (num_marshal_zones)
-            d10 = struct.unpack_from('<B', data, offset + 49)   # 49 (safety_car_status)
-            d11 = struct.unpack_from('<B', data, offset + 50)   # 50 (network_game)
+            # 19-123: 21 marshal zones of 5 bytes (float zoneStart, int8 zoneFlag)
+            d10 = struct.unpack_from('<B', data, offset + 124)  # 124 (safety_car_status)
+            d11 = struct.unpack_from('<B', data, offset + 125)  # 125 (network_game)
             return SessionData(
                 weather=d0[0],
                 track_temperature=d1[0],

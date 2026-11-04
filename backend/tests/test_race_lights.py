@@ -45,6 +45,12 @@ class DecoderTest(unittest.TestCase):
     def test_plain_event(self):
         self.assertEqual(self.decode(event_packet("LGOT"))["event"], {"code": "LGOT"})
 
+    def test_safety_car_status_sits_after_the_marshal_zones(self):
+        session = bytearray(615)
+        session[49] = 38                    # inside the marshal zones, not the status
+        session[124] = 2
+        self.assertEqual(self.decode(header(1) + bytes(session))["session"]["safety_car_status"], 2)
+
     def test_player_fia_flag(self):
         self.assertEqual(self.decode(car_status_packet(3))["status"]["fia_flags"], 3)
         self.assertEqual(self.decode(car_status_packet(-1))["status"]["fia_flags"], -1)

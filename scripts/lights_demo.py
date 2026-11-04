@@ -36,7 +36,7 @@ def event(code, body=b''):
 def send_state():
     session = bytearray(700)
     session[3] = 50                         # total laps
-    session[49] = state["sc"]
+    session[124] = state["sc"]
     send(header(1) + bytes(session))
 
     laps = bytearray(22 * 50 + 2)

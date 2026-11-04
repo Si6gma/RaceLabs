@@ -11,9 +11,10 @@ function deltaColor(ms: number): string {
 
 function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; name: string; behind: boolean }) {
   // Ahead: a shrinking gap is good. Behind: a growing gap is good.
+  // The sign says which for the driver: + good (green), − bad (red).
   const trend = gap?.trendMs ?? null;
   const good  = trend == null ? null : behind ? trend > 0 : trend < 0;
-  const word  = trend == null ? '' : behind ? (trend < 0 ? 'closing' : 'dropping') : (trend < 0 ? 'gaining' : 'losing');
+  const color = good == null ? '#B8C8D6' : good ? '#00E85A' : '#FF2044';
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center justify-between gap-2">
@@ -21,14 +22,16 @@ function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; 
         <span className="font-telemetry text-[10px] text-motorsport-muted truncate">{gap ? name : '—'}</span>
       </div>
       <div className="flex items-baseline justify-between">
-        <span className="font-telemetry text-[17px] font-bold tabular-nums text-motorsport-text">
-          {gap ? `${behind ? '-' : '+'}${(gap.gapMs / 1000).toFixed(3)}` : '--.---'}
+        <span className="font-telemetry text-[17px] font-bold tabular-nums" style={{ color }}>
+          {gap ? `${(gap.gapMs / 1000).toFixed(3)}s` : '--.---'}
         </span>
         <span
-          className="font-telemetry text-[10px] tabular-nums"
-          style={{ color: good == null ? '#4A6078' : good ? '#00E85A' : '#FF2044' }}
+          className="font-telemetry text-[12px] font-bold tabular-nums"
+          style={{ color: good == null ? '#4A6078' : color }}
         >
-          {trend == null ? (gap ? '1 lap to trend' : '') : `${word} ${(Math.abs(trend) / 1000).toFixed(2)}/lap`}
+          {trend == null
+            ? (gap ? '1 lap to trend' : '')
+            : `${good ? '+' : '−'}${(Math.abs(trend) / 1000).toFixed(2)}/lap`}
         </span>
       </div>
     </div>

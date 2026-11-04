@@ -62,8 +62,6 @@ function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; 
 
 function TimingTower() {
   const l       = useTelemetryStore(s => s.currentFrame?.lap);
-  const t       = useTelemetryStore(s => s.currentFrame?.telemetry);
-  const s       = useTelemetryStore(s => s.currentFrame?.status);
   const session = useTelemetryStore(s => s.session);
   const lapAll      = useTelemetryStore(s => s.currentFrame?.lap_all);
   const sessionData = useTelemetryStore(s => s.currentFrame?.session);
@@ -97,14 +95,12 @@ function TimingTower() {
   const invalid   = l?.current_lap_invalid ?? false;
   const pitStatus = l?.pit_status ?? 0;
   const deltaMs   = bestMs && currentMs > 0 ? currentMs - bestMs : null;
-  const drsActive  = t?.drs === 1;
-  const drsAllowed = s?.drs_allowed === 1;
 
   return (
     <div className="telemetry-panel flex flex-col h-full overflow-hidden">
       <CarSelector />
 
-      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto overflow-x-hidden divide-y divide-motorsport-border">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden divide-y divide-motorsport-border">
         {/* P10 on the left; the running lap time over the lap count on the right */}
         <div className="px-3 py-3 flex items-end justify-between shrink-0">
           <div className="flex items-end gap-2">
@@ -182,22 +178,6 @@ function TimingTower() {
           <span className="font-telemetry text-[18px] font-semibold tabular-nums leading-none text-motorsport-purple">
             {bestMs ? formatTime(bestMs) : '--:--.---'}
           </span>
-        </div>
-
-        {/* DRS: one box whose outline says it all. Solid green = open,
-            dashed green = can be opened, quiet = closed. */}
-        <div className="mt-auto p-3 shrink-0">
-          <div
-            className="h-11 shrink-0 flex items-center justify-center border-2 text-[16px] font-bold tracking-wide uppercase transition-colors"
-            style={{
-              borderStyle:     drsAllowed && !drsActive ? 'dashed' : 'solid',
-              borderColor:     drsActive || drsAllowed ? '#00E85A' : '#2A3745',
-              backgroundColor: drsActive ? '#00E85A1F' : 'transparent',
-              color:           drsActive || drsAllowed ? '#00E85A' : '#5F7183',
-            }}
-          >
-            {drsActive ? 'DRS open' : drsAllowed ? 'DRS available' : 'DRS closed'}
-          </div>
         </div>
       </div>
     </div>

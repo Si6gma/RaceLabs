@@ -21,6 +21,9 @@ function Stat({ label, value, color }: { label: string; value: string; color: st
 
 function ERSSuite() {
   const s = useTelemetryStore(sv => sv.currentFrame?.status);
+  const drs = useTelemetryStore(sv => sv.currentFrame?.telemetry?.drs);
+  const drsActive  = drs === 1;
+  const drsAllowed = s?.drs_allowed === 1;
 
   const storeJ        = s?.ers_store_energy           ?? 0;
   const deployedJ     = s?.ers_deployed_this_lap       ?? 0;
@@ -41,16 +44,30 @@ function ERSSuite() {
 
   return (
     <div className="telemetry-panel flex flex-col overflow-hidden px-3 py-3 gap-3">
-      {/* Deploy mode as a status box, outlined in the mode's colour */}
-      <div
-        className="h-11 flex items-center justify-center border-2 text-[16px] font-bold tracking-wide uppercase transition-colors"
-        style={{
-          borderColor:     deployMode > 0 ? mode.color : '#2A3745',
-          backgroundColor: deployMode > 0 ? `${mode.color}1F` : 'transparent',
-          color:           deployMode > 0 ? mode.color : '#5F7183',
-        }}
-      >
-        ERS {mode.label}
+      {/* Two status boxes side by side. DRS: solid green open, dashed green
+          available, quiet closed. ERS: outlined in the deploy mode's colour. */}
+      <div className="grid grid-cols-2 gap-2">
+        <div
+          className="h-11 flex items-center justify-center border-2 text-[15px] font-bold tracking-wide uppercase transition-colors"
+          style={{
+            borderStyle:     drsAllowed && !drsActive ? 'dashed' : 'solid',
+            borderColor:     drsActive || drsAllowed ? '#00E85A' : '#2A3745',
+            backgroundColor: drsActive ? '#00E85A1F' : 'transparent',
+            color:           drsActive || drsAllowed ? '#00E85A' : '#5F7183',
+          }}
+        >
+          {drsActive ? 'DRS open' : drsAllowed ? 'DRS ready' : 'DRS closed'}
+        </div>
+        <div
+          className="h-11 flex items-center justify-center border-2 text-[15px] font-bold tracking-wide uppercase transition-colors"
+          style={{
+            borderColor:     deployMode > 0 ? mode.color : '#2A3745',
+            backgroundColor: deployMode > 0 ? `${mode.color}1F` : 'transparent',
+            color:           deployMode > 0 ? mode.color : '#5F7183',
+          }}
+        >
+          ERS {mode.label}
+        </div>
       </div>
 
       {/* Battery charge with its bar */}

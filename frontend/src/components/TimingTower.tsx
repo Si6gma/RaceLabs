@@ -21,33 +21,26 @@ function deltaColor(ms: number): string {
 const GOOD = '#00E85A';
 const BAD  = '#FF2044';
 
-// How the interval moved over the last lap, said the way a pit wall says it.
-// A smaller gap to the car ahead is good; a bigger gap to the car behind is good.
-function trendWords(trendMs: number | null, behind: boolean): { text: string; good: boolean } | null {
-  if (trendMs == null || Math.abs(trendMs) < 5) return null;
-  const closing = trendMs < 0;
-  const amount = `${(Math.abs(trendMs) / 1000).toFixed(2)} s/lap`;
-  if (behind) return closing ? { text: `closing in ${amount}`, good: false } : { text: `pulling away ${amount}`, good: true };
-  return closing ? { text: `closing ${amount}`, good: true } : { text: `losing ${amount}`, good: false };
-}
-
-function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; name: string; behind: boolean }) {
-  const trend = trendWords(gap?.trendMs ?? null, behind);
+// Pace on the last lap both cars completed: their lap time minus ours.
+// Positive means they were slower than us, which is good either side.
+function GapRow({ label, gap, name, behind, pace }: {
+  label: string; gap: Gap | null; name: string; behind: boolean; pace: { lap: number; ms: number } | null;
+}) {
+  const good = pace ? pace.ms >= 0 : null;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-2">
         <span className="eng-label">{label}</span>
         <span className="text-[14px] font-semibold tracking-wide text-motorsport-text truncate">{gap ? name : '—'}</span>
       </div>
-      {/* The car ahead is time to make up (red, minus); the car behind is cushion (green, plus). */}
-      <span
-        className="font-telemetry text-[28px] font-bold tabular-nums leading-none"
-        style={{ color: gap ? (behind ? GOOD : BAD) : '#5F7183' }}
-      >
+      <span className="font-telemetry text-[28px] font-bold tabular-nums leading-none" style={{ color: gap ? '#E8EEF4' : '#5F7183' }}>
         {gap ? `${behind ? '+' : '−'}${(gap.gapMs / 1000).toFixed(3)}s` : '--.---'}
       </span>
-      <span className="text-[13px] font-semibold leading-none h-[13px]" style={{ color: trend == null ? '#5F7183' : trend.good ? GOOD : BAD }}>
-        {trend ? trend.text : gap ? 'first lap' : ''}
+      <span className="flex items-baseline justify-between h-[13px] leading-none">
+        <span className="font-telemetry text-[13px] font-semibold tabular-nums" style={{ color: good == null ? '#5F7183' : good ? GOOD : BAD }}>
+          {pace ? `${pace.ms >= 0 ? '+' : '−'}${(Math.abs(pace.ms) / 1000).toFixed(3)} ${pace.ms >= 0 ? 'slower' : 'faster'}` : gap ? 'waiting for a full lap' : ''}
+        </span>
+        {pace && <span className="text-[12px] text-motorsport-muted font-semibold">lap {pace.lap}</span>}
       </span>
     </div>
   );
@@ -129,8 +122,16 @@ function TimingTower() {
             Both take the same height so nothing below moves between sessions. */}
         {isRace ? (
         <div className="px-3 py-3 bg-motorsport-dark shrink-0 h-[180px] flex flex-col justify-between">
-          <GapRow label="Ahead" gap={gaps.ahead} name={gaps.ahead ? nameOf(gaps.ahead.carIndex) : ''} behind={false} />
-          <GapRow label="Behind" gap={gaps.behind} name={gaps.behind ? nameOf(gaps.behind.carIndex) : ''} behind />
+          <GapRow
+            label="Ahead" behind={false} gap={gaps.ahead}
+            name={gaps.ahead ? nameOf(gaps.ahead.carIndex) : ''}
+            pace={gaps.ahead ? sectors.current.tracker.paceDeltaFor(viewedIdx, gaps.ahead.carIndex) : null}
+          />
+          <GapRow
+            label="Behind" behind gap={gaps.behind}
+            name={gaps.behind ? nameOf(gaps.behind.carIndex) : ''}
+            pace={gaps.behind ? sectors.current.tracker.paceDeltaFor(viewedIdx, gaps.behind.carIndex) : null}
+          />
         </div>
         ) : (
         <div className="px-3 py-3 bg-motorsport-dark shrink-0 h-[180px] flex flex-col justify-center gap-2">

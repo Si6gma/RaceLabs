@@ -30,6 +30,9 @@ export class SectorTracker {
   private carBest = new Map<number, Array<number | null>>();
   private latest = new Map<number, Array<SectorTime | null>>();
   private bestLap = new Map<number, number>();
+  // Every completed lap's time per car, by lap number, so two cars can be
+  // compared on the same lap once both have finished it.
+  private lapTimes = new Map<number, Map<number, number>>();
 
   update(laps: LapData[]) {
     laps.forEach((car, idx) => {
@@ -49,7 +52,14 @@ export class SectorTracker {
       if (prev.sector === 0 && now.sector === 1) { done = 0; ms = now.s1; }
       else if (prev.sector === 1 && now.sector === 2) { done = 1; ms = now.s2; }
       // s1/s2 reset with the new lap, so sector 3 comes from the previous frame.
-      else if (prev.sector === 2 && now.sector === 0) { done = 2; ms = car.last_lap_time_ms - prev.s1 - prev.s2; }
+      else if (prev.sector === 2 && now.sector === 0) {
+        done = 2; ms = car.last_lap_time_ms - prev.s1 - prev.s2;
+        if (car.last_lap_time_ms > 0) {
+          const times = this.lapTimes.get(idx) ?? new Map<number, number>();
+          times.set(car.current_lap_num - 1, car.last_lap_time_ms);
+          this.lapTimes.set(idx, times);
+        }
+      }
       else return;
       if (ms <= 0) return;
 
@@ -81,5 +91,17 @@ export class SectorTracker {
 
   bestLapFor(carIdx: number): number | null {
     return this.bestLap.get(carIdx) ?? null;
+  }
+
+  // The other car's time minus ours on our most recent completed lap, or null
+  // until both have finished that lap. Positive means they were slower.
+  paceDeltaFor(carIdx: number, otherIdx: number): { lap: number; ms: number } | null {
+    const mine = this.lapTimes.get(carIdx);
+    const theirs = this.lapTimes.get(otherIdx);
+    if (!mine || !theirs) return null;
+    const lap = Math.max(...mine.keys());
+    const a = mine.get(lap);
+    const b = theirs.get(lap);
+    return a != null && b != null ? { lap, ms: b - a } : null;
   }
 }

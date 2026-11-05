@@ -33,7 +33,7 @@ function RevBar({ rpm, revPercent }: { rpm: number; revPercent: number }) {
           );
         })}
       </div>
-      <span className="font-telemetry text-[18px] font-semibold tabular-nums leading-none text-motorsport-text">
+      <span className="font-telemetry text-[18px] font-semibold tabular-nums leading-none text-motorsport-text text-center">
         {rpm.toLocaleString()}
         <span className="text-[12px] text-motorsport-muted font-medium ml-1">rpm</span>
       </span>

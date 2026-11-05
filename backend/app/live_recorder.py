@@ -98,6 +98,8 @@ class _LapInProgress:
     samples: List[Dict[str, Any]] = field(default_factory=list)
     flashbacks: int = 0
     field_frames: List[Dict[str, Any]] = field(default_factory=list)
+    # A ghost the game jumped forward (a restart parks it at the end): not a driven lap.
+    teleported: bool = False
 
 
 @dataclass
@@ -210,6 +212,8 @@ def finalize_lap(
 GHOST_STEP_MAX_S = 0.25
 # A ghost this close to the track's end that drops back to the line has finished its lap.
 GHOST_END_M = 50.0
+# A ghost moving forward by more than this in one packet was moved by the game, not driven.
+GHOST_JUMP_M = 300.0
 
 
 def ghost_wrapped(lap: _LapInProgress, distance: float, meta: Dict[str, Any]) -> bool:
@@ -434,6 +438,8 @@ class LiveRecorder:
         rewound = bool(current.samples) and is_flashback(current.samples[-1], sample)
         if rewound:
             current.samples = rewind_samples(current.samples, distance)
+        if current.samples and distance - float(current.samples[-1].get("lap_distance") or 0) > GHOST_JUMP_M:
+            current.teleported = True
         current.samples.append(ghost_sample(sample, current.samples[-1] if current.samples else None, rewound))
 
     # ----- internals -----
@@ -446,7 +452,7 @@ class LiveRecorder:
         self._ghost_saved = set()
 
     def _finish_ghost(self, index: int, lap: _LapInProgress, lap_time_ms: int, next_session_time: float):
-        if lap_time_ms <= 0 or (index, lap_time_ms) in self._ghost_saved:
+        if lap_time_ms <= 0 or lap.teleported or (index, lap_time_ms) in self._ghost_saved:
             return
         result = finalize_lap(lap, lap_time_ms, time.time() - next_session_time)
         if isinstance(result, str) or result.partial_start:

@@ -534,6 +534,16 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         await self.rec.drain()
         self.assertEqual(self.saved, [])
 
+    async def test_restart_that_teleports_the_ghost_to_the_end_is_not_a_completion(self):
+        self.drive_ghost(3, 2, count=30, lap_time_ms=83873)   # 2900 m, then the game jumps it to the end
+        self.rec.on_ghost_sample(3, sample(2, 50, last_lap_time_ms=83873, session_time=203.0), TT_META)
+        self.drive_ghost(3, 2, count=51, lap_time_ms=83873)   # back on the line, a full lap
+        await self.rec.drain()
+        self.assertEqual(self.saved, [])
+        self.drive_ghost(3, 2, count=51, lap_time_ms=83873)   # the wrap that ends the full lap
+        await self.rec.drain()
+        self.assertEqual([len(lap.samples) for lap in self.saved], [51])
+
     async def test_ghosts_outside_time_trial_are_ignored(self):
         self.drive_ghost(3, 1, meta=META)
         self.drive_ghost(3, 2, lap_time_ms=83873, meta=META)

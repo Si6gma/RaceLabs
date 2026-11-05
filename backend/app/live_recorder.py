@@ -206,11 +206,34 @@ def finalize_lap(
     )
 
 
-def ghost_sample(sample: Dict[str, Any], lap: _LapInProgress) -> Dict[str, Any]:
-    """The ghost's sample with its own lap clock: the game mirrors the player's
-    current_lap_time_ms onto ghosts, so time is counted from the lap's first sample."""
-    start = float(lap.samples[0].get("session_time") or 0) if lap.samples else float(sample.get("session_time") or 0)
-    return {**sample, "current_lap_time_ms": int(round((float(sample.get("session_time") or 0) - start) * 1000))}
+# A ghost clock step longer than this is not one packet interval (a pause, a restart).
+GHOST_STEP_MAX_S = 0.25
+
+
+def ghost_sample(sample: Dict[str, Any], previous: Optional[Dict[str, Any]], rewound: bool) -> Dict[str, Any]:
+    """The ghost's sample with its own lap clock. The game mirrors the player's
+    current_lap_time_ms onto ghosts, so the clock is built from session_time one
+    packet at a time; it does not advance across a rewind, and never by more than
+    one packet's worth, so time spent paused or restarting is not lap time."""
+    if previous is None:
+        return {**sample, "current_lap_time_ms": 0}
+    step = 0.0 if rewound else float(sample.get("session_time") or 0) - float(previous.get("session_time") or 0)
+    step = min(max(step, 0.0), GHOST_STEP_MAX_S)
+    return {**sample, "current_lap_time_ms": int(previous.get("current_lap_time_ms") or 0) + int(round(step * 1000))}
+
+
+def ghost_sectors(samples: List[Dict[str, Any]], lap_time_ms: int) -> tuple:
+    """(sector1, sector2, sector3) read off the ghost's own clock where its sector counter
+    ticks over; the game's sector time fields mean nothing for ghost slots."""
+    first: Dict[int, int] = {}
+    for s in samples:
+        sector = int(s.get("sector") or 0)
+        if sector in (1, 2) and sector not in first:
+            first[sector] = int(s.get("current_lap_time_ms") or 0)
+    s1 = first.get(1)
+    s2 = first[2] - s1 if s1 and 2 in first else None
+    s3 = lap_time_ms - first[2] if 2 in first else None
+    return s1 or None, s2 if s2 and s2 > 0 else None, s3 if s3 and s3 > 0 else None
 
 
 def _sample_dicts(lap: FinalizedLap) -> List[Dict[str, Any]]:
@@ -394,9 +417,10 @@ class LiveRecorder:
             self._ghosts[index] = current
         elif current.samples and distance == float(current.samples[-1].get("lap_distance") or 0):
             return
-        if current.samples and is_flashback(current.samples[-1], sample):
+        rewound = bool(current.samples) and is_flashback(current.samples[-1], sample)
+        if rewound:
             current.samples = rewind_samples(current.samples, distance)
-        current.samples.append(ghost_sample(sample, current))
+        current.samples.append(ghost_sample(sample, current.samples[-1] if current.samples else None, rewound))
 
     # ----- internals -----
 
@@ -414,7 +438,9 @@ class LiveRecorder:
         if isinstance(result, str) or result.partial_start:
             return
         self._ghost_saved.add((index, lap_time_ms))
-        self._schedule(self._persist_safely(replace(result, ghost={"car_index": index, "lap_time_ms": lap_time_ms})))
+        s1, s2, s3 = ghost_sectors(result.samples, lap_time_ms)
+        result = replace(result, sector1_ms=s1, sector2_ms=s2, sector3_ms=s3, ghost={"car_index": index, "lap_time_ms": lap_time_ms})
+        self._schedule(self._persist_safely(result))
 
     def _track_grid(self, lap_all: List[Dict[str, Any]]):
         for index, lap in enumerate(lap_all):

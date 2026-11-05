@@ -458,9 +458,10 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         self.rec = LiveRecorder(session_factory=None, persist=persist)
         self.rec.start()
 
-    def drive_ghost(self, index: int, lap_num: int, count: int = 50, lap_time_ms: int = 0, meta=TT_META):
+    def drive_ghost(self, index: int, lap_num: int, count: int = 50, lap_time_ms: int = 0, meta=TT_META, **fields: Any):
+        # Packets 50 ms apart, the way the game sends them.
         for i in range(count):
-            self.rec.on_ghost_sample(index, sample(lap_num, i, last_lap_time_ms=lap_time_ms), meta)
+            self.rec.on_ghost_sample(index, sample(lap_num, i, last_lap_time_ms=lap_time_ms, session_time=lap_num * 100.0 + i * 0.05, **fields), meta)
 
     async def test_ghost_lap_saved_once_with_its_slot_and_lap_time(self):
         self.drive_ghost(3, 1)
@@ -480,7 +481,27 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         self.drive_ghost(3, 2, lap_time_ms=83873)
         await self.rec.drain()
         times = [s["current_lap_time_ms"] for s in self.saved[0].samples]
-        self.assertEqual((times[0], times[1], times[-1]), (0, 1000, 49000))
+        self.assertEqual((times[0], times[1], times[-1]), (0, 50, 2450))
+
+    async def test_ghost_clock_does_not_count_time_spent_restarting(self):
+        # A restart rewinds the ghost to the line; the minutes spent before it are not lap time.
+        for i in range(20):
+            self.rec.on_ghost_sample(3, sample(1, i, session_time=100.0 + i * 0.05), TT_META)
+        for i in range(50):
+            self.rec.on_ghost_sample(3, sample(1, i, session_time=400.0 + i * 0.05), TT_META)
+        self.drive_ghost(3, 2, lap_time_ms=83873)
+        await self.rec.drain()
+        times = [s["current_lap_time_ms"] for s in self.saved[0].samples]
+        self.assertEqual(len(times), 50)
+        self.assertEqual((times[0], times[-1]), (0, 2450))
+
+    async def test_ghost_sectors_come_from_its_sector_counter_on_its_own_clock(self):
+        # The game's sector fields mean nothing for ghosts; the counter ticks at i=17 and i=34.
+        self.drive_ghost(3, 1, sector1_ms=27, sector2_ms=40)
+        self.drive_ghost(3, 2, lap_time_ms=83873)
+        await self.rec.drain()
+        lap = self.saved[0]
+        self.assertEqual((lap.sector1_ms, lap.sector2_ms, lap.sector3_ms), (850, 850, 83873 - 1700))
 
     async def test_partial_first_ghost_lap_skipped_next_loop_saved(self):
         for i in range(10, 50):

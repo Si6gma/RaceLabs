@@ -206,11 +206,13 @@ export default function Recorded() {
         fetch(`${API_URL}/api/import/sessions/${sessionId}/grid`).then(r => (r.ok ? r.json() : null)).then(g => {
           if (!cancelled && g) setGrid(g.laps ?? []);
         }).catch(() => {});
+        // The pit lane before the line has negative lap distance: an out-lap starts at the line.
+        const onTrack = (samples: TelemetryPoint[]) => samples.filter(s => (s.cumulative_distance ?? 0) >= 0);
         const loaded = await Promise.all(data.laps.map(async (meta): Promise<LoadedLap> => {
           const r = await fetch(`${API_URL}/api/import/laps/${meta.id}/resampled`);
-          if (r.ok) return { meta, samples: (await r.json()).samples as TelemetryPoint[] };
+          if (r.ok) return { meta, samples: onTrack((await r.json()).samples as TelemetryPoint[]) };
           const raw = await fetch(`${API_URL}/api/import/laps/${meta.id}/telemetry`);
-          return { meta, samples: raw.ok ? normalizeImportedSamples((await raw.json()).samples) : [] };
+          return { meta, samples: raw.ok ? onTrack(normalizeImportedSamples((await raw.json()).samples)) : [] };
         }));
         if (cancelled) return;
         // Your laps in order, then the ghosts

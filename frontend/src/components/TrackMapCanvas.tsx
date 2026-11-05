@@ -12,26 +12,7 @@ interface TrackOutline {
 
 const outlines = trackOutlines as unknown as Record<string, TrackOutline>;
 
-// F1 23 team colors by teamId
-const TEAM_COLORS: Record<number, string> = {
-  0:  '#00D2BE',  // Mercedes
-  1:  '#E8002D',  // Ferrari
-  2:  '#3671C6',  // Red Bull
-  3:  '#64C4FF',  // Williams
-  4:  '#358C75',  // Aston Martin
-  5:  '#0090FF',  // Alpine
-  6:  '#2B4562',  // AlphaTauri
-  7:  '#B6BABD',  // Haas
-  8:  '#FF8000',  // McLaren
-  9:  '#C92D4B',  // Alfa Romeo
-  85: '#AAAAAA',  // MyTeam
-};
-const FALLBACK_COLOR = '#888888';
-
-function teamColor(teamId: number | undefined): string {
-  if (teamId === undefined) return FALLBACK_COLOR;
-  return TEAM_COLORS[teamId] ?? FALLBACK_COLOR;
-}
+import { teamColor } from '@/utils/teams';
 
 interface Props {
   trackId?: number;

@@ -4,6 +4,7 @@ import { formatTime } from '@/utils/formatters';
 import { GapTracker, RACE_SESSION_TYPES, type Gap } from '@/utils/raceGaps';
 import { SectorTracker, type SectorColour } from '@/utils/sectorTimes';
 import CarSelector from '@/components/CarSelector';
+import DriverTag from '@/components/DriverTag';
 
 const SECTOR_COLOURS: Record<SectorColour, string> = {
   purple: '#8855FF',
@@ -23,15 +24,18 @@ const BAD  = '#FF2044';
 
 // Pace on the last lap both cars completed: their lap time minus ours.
 // Positive means they were slower than us, which is good either side.
-function GapRow({ label, gap, name, behind, pace }: {
-  label: string; gap: Gap | null; name: string; behind: boolean; pace: { lap: number; ms: number } | null;
+function GapRow({ label, gap, name, teamId, behind, pace }: {
+  label: string; gap: Gap | null; name: string; teamId?: number; behind: boolean; pace: { lap: number; ms: number } | null;
 }) {
   const good = pace ? pace.ms >= 0 : null;
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-2">
+      <div className="flex items-center justify-between gap-2">
         <span className="eng-label">{label}</span>
-        <span className="text-[14px] font-semibold tracking-wide text-motorsport-text truncate">{gap ? name : '—'}</span>
+        <span className="flex items-center gap-2 min-w-0">
+          <span className="text-[14px] font-semibold tracking-wide text-motorsport-text truncate">{gap ? name : '—'}</span>
+          {gap && <DriverTag name={name} teamId={teamId} size="sm" />}
+        </span>
       </div>
       <span className="font-telemetry text-[28px] font-bold tabular-nums leading-none" style={{ color: gap ? '#E8EEF4' : '#5F7183' }}>
         {gap ? `${behind ? '+' : '−'}${(gap.gapMs / 1000).toFixed(3)}s` : '--.---'}
@@ -68,6 +72,7 @@ function TimingTower() {
   if (lapAll) sectors.current.tracker.update(lapAll);
   const sectorTimes = sectors.current.tracker.latestFor(viewedIdx);
   const nameOf = (idx: number) => participants.find(p => p.index === idx)?.name ?? `Car ${idx + 1}`;
+  const teamOf = (idx: number) => participants.find(p => p.index === idx)?.team_id;
 
   const position  = l?.car_position ?? 0;
   const lapNum    = l?.current_lap_num ?? 0;
@@ -125,11 +130,13 @@ function TimingTower() {
           <GapRow
             label="Ahead" behind={false} gap={gaps.ahead}
             name={gaps.ahead ? nameOf(gaps.ahead.carIndex) : ''}
+            teamId={gaps.ahead ? teamOf(gaps.ahead.carIndex) : undefined}
             pace={gaps.ahead ? sectors.current.tracker.paceDeltaFor(viewedIdx, gaps.ahead.carIndex) : null}
           />
           <GapRow
             label="Behind" behind gap={gaps.behind}
             name={gaps.behind ? nameOf(gaps.behind.carIndex) : ''}
+            teamId={gaps.behind ? teamOf(gaps.behind.carIndex) : undefined}
             pace={gaps.behind ? sectors.current.tracker.paceDeltaFor(viewedIdx, gaps.behind.carIndex) : null}
           />
         </div>

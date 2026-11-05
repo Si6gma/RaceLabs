@@ -25,6 +25,8 @@ _PLAYER_KEYS = ("lap", "telemetry", "motion", "status", "session")
 @dataclass
 class SessionState:
     session_id: str
+    # Header session_uid of the game session this summary belongs to.
+    session_uid: str = ""
     track: str = "Unknown"
     session_type: str = "Unknown"
     session_type_id: int = 0
@@ -101,6 +103,7 @@ class TelemetryPipeline:
                 frame_dict["car_team_ids"] = self.session_state.car_team_ids
 
             self._player["session_uid"] = frame_dict.get("session_uid")
+            self._track_session_uid(frame_dict.get("session_uid"))
             for key in _PLAYER_KEYS:
                 if key in frame_dict:
                     self._player[key] = frame_dict[key]
@@ -126,6 +129,36 @@ class TelemetryPipeline:
 
         return frame_dict
 
+    def _start_session(self, previous: Optional[SessionState] = None) -> SessionState:
+        """Replace the live summary with a fresh one. Track and type fields carry over
+        from `previous` so a restart does not show "Unknown" until the next session packet."""
+        if previous is not None:
+            previous.is_active = False
+        state = SessionState(session_id=f"sess_{int(time.time())}")
+        state.is_active = True
+        if previous is not None:
+            state.session_uid = previous.session_uid
+            state.track = previous.track
+            state.track_id = previous.track_id
+            state.track_length = previous.track_length
+            state.session_type = previous.session_type
+            state.session_type_id = previous.session_type_id
+            state.total_laps = previous.total_laps
+            state.car_team_ids = previous.car_team_ids
+        self.session_state = state
+        return state
+
+    def _track_session_uid(self, raw_uid: Any):
+        """A new header session_uid means the game started a new session (restart,
+        new event). Lap counters and best lap must not survive it."""
+        uid = str(raw_uid) if raw_uid not in (None, "", 0) else ""
+        state = self.session_state
+        if not uid:
+            return
+        if state.session_uid and uid != state.session_uid:
+            state = self._start_session(previous=state)
+        state.session_uid = uid
+
     def _update_session(self, s: Dict[str, Any]):
         state = self.session_state
         new_track = self._track_name(s.get("track_id", -1))
@@ -133,9 +166,7 @@ class TelemetryPipeline:
         # Start a fresh summary if track or session type changed
         if state.track != "Unknown" and state.session_type != "Unknown":
             if new_track != state.track or new_type != state.session_type:
-                state.is_active = False
-                state = self.session_state = SessionState(session_id=f"sess_{int(time.time())}")
-                state.is_active = True
+                state = self._start_session(previous=state)
         state.track = new_track
         state.track_id = s.get("track_id", -1)
         state.track_length = s.get("track_length", 0)
@@ -241,7 +272,9 @@ class TelemetryPipeline:
         recorded_laps = self.recorder.status()["recorded_laps"] if self.recorder else 0
         return {
             "session_id": session.session_id,
+            "session_uid": session.session_uid,
             "track": session.track,
+            "track_id": session.track_id,
             "session_type": session.session_type,
             "current_lap": session.current_lap,
             "best_lap_time": session.best_lap_time,

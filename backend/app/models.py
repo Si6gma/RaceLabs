@@ -157,3 +157,11 @@ class TelemetrySample(Base):
 
     session = relationship("ImportedSession", back_populates="samples")
     lap = relationship("ImportedLap", back_populates="samples")
+
+
+class TrackAlias(Base):
+    """A user-chosen nickname for a track, keyed by the track_id string used on sessions."""
+    __tablename__ = "track_aliases"
+
+    track_id = Column(String, primary_key=True)
+    nickname = Column(String, nullable=False)

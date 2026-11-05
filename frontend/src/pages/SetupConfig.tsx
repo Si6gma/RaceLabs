@@ -1,216 +1,161 @@
-import { useState } from 'react';
-import { Wifi, Server, Database, Save, RotateCcw, Check } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useTelemetryStore } from '@/stores/telemetryStore';
+import { apiFetch, getControlKey, setControlKey } from '@/utils/api';
+import trackOutlines from '@/data/track_outlines.json';
 
-interface ConfigState {
-  udpPort:      number;
-  wsUrl:        string;
-  apiUrl:       string;
-  influxUrl:    string;
-  bufferSize:   number;
-  fps:          number;
-  theme:        'dark' | 'darker';
-  units:        'metric' | 'imperial';
-  showTyreTemps: boolean;
-  showDamage:   boolean;
-  autoRecord:   boolean;
-}
+const TRACKS = Object.entries(trackOutlines as Record<string, { name: string }>)
+  .map(([id, t]) => ({ id, name: t.name }))
+  .sort((a, b) => a.name.localeCompare(b.name));
 
-const DEFAULT_CONFIG: ConfigState = {
-  udpPort:      20777,
-  wsUrl:        'ws://localhost:8000/ws',
-  apiUrl:       'http://localhost:8000',
-  influxUrl:    'http://localhost:8086',
-  bufferSize:   1000,
-  fps:          60,
-  theme:        'dark',
-  units:        'metric',
-  showTyreTemps: true,
-  showDamage:   true,
-  autoRecord:   false,
-};
+// Settings that live on this browser or on the server. Nothing here is decoration:
+// the control key decides who may press buttons, nicknames rename circuits everywhere.
+export default function SetupConfig() {
+  const trackAliases = useTelemetryStore(s => s.trackAliases);
+  const setTrackAliases = useTelemetryStore(s => s.setTrackAliases);
+  const session = useTelemetryStore(s => s.session);
 
-function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  const [protectedServer, setProtectedServer] = useState<boolean | null>(null);
+  const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  const [key, setKey] = useState(getControlKey());
+  const [keyState, setKeyState] = useState<'unknown' | 'ok' | 'rejected'>('unknown');
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/access').then(r => r.json()).then(d => setProtectedServer(!!d.protected)).catch(() => setProtectedServer(null));
+    fetch('/health').then(r => setBackendUp(r.ok)).catch(() => setBackendUp(false));
+    fetch('/api/tracks/aliases').then(r => r.json()).then(d => setTrackAliases(d.aliases ?? {})).catch(() => {});
+  }, [setTrackAliases]);
+
+  // Prove the key with a harmless write: re-saving a nickname to its current value.
+  const saveKey = async () => {
+    setControlKey(key.trim());
+    if (!key.trim()) { setKeyState('unknown'); return; }
+    const probe = TRACKS[0];
+    const res = await apiFetch(`/api/tracks/${probe.id}/alias`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: trackAliases[probe.id] ?? '' }),
+    }).catch(() => null);
+    setKeyState(res?.ok ? 'ok' : 'rejected');
+  };
+
+  const saveAlias = async (id: string) => {
+    const nickname = (drafts[id] ?? trackAliases[id] ?? '').trim();
+    if (nickname === (trackAliases[id] ?? '')) return;
+    const res = await apiFetch(`/api/tracks/${id}/alias`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname }),
+    }).catch(() => null);
+    if (res?.ok) {
+      const data = await res.json();
+      setTrackAliases(data.aliases ?? {});
+      setSavedId(id);
+      setTimeout(() => setSavedId(s => (s === id ? null : s)), 1500);
+    } else if (res?.status === 403) {
+      setKeyState('rejected');
+    }
+  };
+
+  const currentTrackId = session?.track_id != null ? String(session.track_id) : null;
+  const orderedTracks = useMemo(
+    () => [...TRACKS].sort((a, b) => (a.id === currentTrackId ? -1 : b.id === currentTrackId ? 1 : 0)),
+    [currentTrackId],
+  );
+
+  const writesBlocked = protectedServer === true && (!getControlKey() || keyState === 'rejected');
+
   return (
-    <div className="flex flex-col gap-0.5">
-      <label className="eng-label">{label}</label>
-      {children}
+    <div className="h-full flex gap-px p-px overflow-hidden bg-motorsport-border">
+      {/* ── Left: who may press the buttons, and whether the backend is there ── */}
+      <div className="w-[360px] shrink-0 flex flex-col gap-px min-h-0">
+        <div className="telemetry-panel p-4 flex flex-col gap-4">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[16px] font-bold tracking-wide text-motorsport-text">Access</span>
+            <span className="text-[12px] font-semibold" style={{ color: protectedServer == null ? '#5F7183' : protectedServer ? '#00E85A' : '#FFD000' }}>
+              {protectedServer == null ? 'checking' : protectedServer ? 'server asks for a key' : 'server is open'}
+            </span>
+          </div>
+          <p className="text-[13px] text-motorsport-muted leading-relaxed">
+            Anyone can watch. Recording, lights, imports, renames and deletes need the control key when the server has one set.
+            The key stays in this browser only.
+          </p>
+          <label className="flex flex-col gap-1.5">
+            <span className="eng-label">Control key</span>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={key}
+                onChange={e => { setKey(e.target.value); setKeyState('unknown'); }}
+                onKeyDown={e => { if (e.key === 'Enter') saveKey(); }}
+                placeholder="leave empty on an open server"
+                className="flex-1 min-w-0 bg-motorsport-dark border border-motorsport-border px-3 h-9 font-telemetry text-[14px] text-motorsport-text placeholder:text-motorsport-dim focus:outline-none focus:border-motorsport-orange"
+              />
+              <button onClick={saveKey} className="px-3 h-9 border border-motorsport-border-strong text-[12px] font-bold tracking-wide uppercase text-motorsport-text hover:border-motorsport-orange transition-colors">
+                Save
+              </button>
+            </div>
+          </label>
+          <span className="text-[13px] font-semibold h-[13px] leading-none" style={{ color: keyState === 'ok' ? '#00E85A' : keyState === 'rejected' ? '#FF2044' : 'transparent' }}>
+            {keyState === 'ok' ? 'Key accepted' : keyState === 'rejected' ? 'Key rejected by the server' : '.'}
+          </span>
+        </div>
+
+        <div className="telemetry-panel p-4 flex flex-col gap-3">
+          <span className="text-[16px] font-bold tracking-wide text-motorsport-text">Connection</span>
+          <Row label="Backend" value={backendUp == null ? 'checking' : backendUp ? 'reachable' : 'unreachable'} color={backendUp == null ? '#9AACBE' : backendUp ? '#00E85A' : '#FF2044'} />
+          <Row label="Game telemetry" value="UDP port 20777 on the server" />
+          <Row label="Format" value="F1 23 / F1 24, 2023 packet layout" />
+        </div>
+      </div>
+
+      {/* ── Right: what to call each circuit ── */}
+      <div className="flex-1 min-w-0 telemetry-panel flex flex-col min-h-0 overflow-hidden">
+        <div className="px-4 py-3 border-b border-motorsport-border flex items-baseline justify-between">
+          <span className="text-[16px] font-bold tracking-wide text-motorsport-text">Track nicknames</span>
+          <span className="text-[12px] text-motorsport-muted font-semibold">shown in the header and the recorded list</span>
+        </div>
+        {writesBlocked && (
+          <div className="px-4 py-2 text-[13px] text-motorsport-yellow border-b border-motorsport-border">
+            Set a valid control key on the left to save nicknames.
+          </div>
+        )}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {orderedTracks.map(t => {
+            const draft = drafts[t.id] ?? trackAliases[t.id] ?? '';
+            const current = t.id === currentTrackId;
+            return (
+              <div key={t.id} className={`flex items-center gap-4 px-4 h-11 border-b border-motorsport-border/60 ${current ? 'bg-motorsport-orange/[0.06]' : ''}`}>
+                <span className="w-[160px] shrink-0 text-[14px] font-bold tracking-wide text-motorsport-text truncate">
+                  {t.name}
+                  {current && <span className="ml-2 text-[11px] text-motorsport-orange font-bold uppercase">now</span>}
+                </span>
+                <input
+                  value={draft}
+                  maxLength={80}
+                  disabled={writesBlocked}
+                  onChange={e => setDrafts(d => ({ ...d, [t.id]: e.target.value }))}
+                  onBlur={() => saveAlias(t.id)}
+                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                  placeholder="nickname"
+                  className="flex-1 min-w-0 max-w-[360px] bg-transparent border-b border-motorsport-border px-1 h-8 text-[14px] text-motorsport-text placeholder:text-motorsport-dim focus:outline-none focus:border-motorsport-orange disabled:opacity-40"
+                />
+                <span className="w-16 text-[12px] font-semibold text-motorsport-green">{savedId === t.id ? 'saved' : ''}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: () => void }) {
+function Row({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <button
-      onClick={onChange}
-      className="relative w-10 h-5 border transition-colors shrink-0"
-      style={{
-        backgroundColor: checked ? '#FF770015' : 'transparent',
-        borderColor: checked ? '#FF770060' : '#1A2840',
-      }}
-    >
-      <div
-        className="absolute top-0.5 w-4 h-4 transition-transform flex items-center justify-center"
-        style={{
-          left: checked ? '20px' : '2px',
-          backgroundColor: checked ? '#FF7700' : '#243546',
-        }}
-      >
-        {checked && <Check className="w-2.5 h-2.5 text-black" strokeWidth={3} />}
-      </div>
-    </button>
-  );
-}
-
-export default function SetupConfig() {
-  const [config, setConfig] = useState<ConfigState>(DEFAULT_CONFIG);
-  const [saved, setSaved]   = useState(false);
-
-  const set = <K extends keyof ConfigState>(key: K, value: ConfigState[K]) => {
-    setConfig(prev => ({ ...prev, [key]: value }));
-    setSaved(false);
-  };
-
-  const handleSave = () => {
-    localStorage.setItem('telemetry_config', JSON.stringify(config));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  };
-
-  return (
-    <div className="h-full flex flex-col gap-px p-px bg-motorsport-dim/20 overflow-auto">
-      {/* ── Header ── */}
-      <div className="telemetry-panel shrink-0">
-        <div className="panel-header justify-between">
-          <span className="eng-label font-bold">System Configuration</span>
-          <div className="flex items-center gap-2">
-            {saved && (
-              <span className="flex items-center gap-1.5 text-[11px] text-motorsport-green uppercase tracking-wider">
-                <Check className="w-3 h-3" /> Saved
-              </span>
-            )}
-            <button onClick={() => { setConfig(DEFAULT_CONFIG); setSaved(false); }} className="btn-ghost h-7 text-[11px]">
-              <RotateCcw className="w-3 h-3" /> Reset
-            </button>
-            <button onClick={handleSave} className="btn-primary h-7 text-[11px]">
-              <Save className="w-3 h-3" /> Save
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-px">
-
-        {/* Connection */}
-        <div className="telemetry-panel">
-          <div className="panel-header">
-            <Wifi className="w-3.5 h-3.5 text-motorsport-cyan" />
-            <span className="eng-label font-bold">Connection</span>
-          </div>
-          <div className="p-3 flex flex-col gap-4">
-            <FieldGroup label="UDP Port">
-              <input
-                type="number"
-                value={config.udpPort}
-                onChange={e => set('udpPort', Number(e.target.value))}
-                className="field text-[13px] h-8"
-              />
-            </FieldGroup>
-            <FieldGroup label="WebSocket URL">
-              <input
-                type="text"
-                value={config.wsUrl}
-                onChange={e => set('wsUrl', e.target.value)}
-                className="field text-[13px] h-8"
-              />
-            </FieldGroup>
-            <FieldGroup label="API URL">
-              <input
-                type="text"
-                value={config.apiUrl}
-                onChange={e => set('apiUrl', e.target.value)}
-                className="field text-[13px] h-8"
-              />
-            </FieldGroup>
-          </div>
-        </div>
-
-        {/* Data Storage */}
-        <div className="telemetry-panel">
-          <div className="panel-header">
-            <Database className="w-3.5 h-3.5 text-motorsport-purple" />
-            <span className="eng-label font-bold">Data Storage</span>
-          </div>
-          <div className="p-3 flex flex-col gap-4">
-            <FieldGroup label="InfluxDB URL">
-              <input
-                type="text"
-                value={config.influxUrl}
-                onChange={e => set('influxUrl', e.target.value)}
-                className="field text-[13px] h-8"
-              />
-            </FieldGroup>
-            <FieldGroup label="Frame Buffer Size">
-              <input
-                type="number"
-                value={config.bufferSize}
-                onChange={e => set('bufferSize', Number(e.target.value))}
-                className="field text-[13px] h-8"
-              />
-            </FieldGroup>
-            <FieldGroup label="Target FPS">
-              <select
-                value={config.fps}
-                onChange={e => set('fps', Number(e.target.value))}
-                className="field text-[13px] h-8 appearance-none cursor-pointer"
-              >
-                <option value={30}>30 FPS</option>
-                <option value={60}>60 FPS</option>
-                <option value={120}>120 FPS</option>
-              </select>
-            </FieldGroup>
-          </div>
-        </div>
-
-        {/* Display */}
-        <div className="telemetry-panel">
-          <div className="panel-header">
-            <Server className="w-3.5 h-3.5 text-motorsport-green" />
-            <span className="eng-label font-bold">Display</span>
-          </div>
-          <div className="p-3 flex flex-col gap-4">
-            <FieldGroup label="Units">
-              <select
-                value={config.units}
-                onChange={e => set('units', e.target.value as 'metric' | 'imperial')}
-                className="field text-[13px] h-8 appearance-none cursor-pointer"
-              >
-                <option value="metric">Metric (km/h, °C, bar)</option>
-                <option value="imperial">Imperial (mph, °F, psi)</option>
-              </select>
-            </FieldGroup>
-          </div>
-        </div>
-
-        {/* Feature Toggles */}
-        <div className="telemetry-panel">
-          <div className="panel-header">
-            <span className="eng-label font-bold">Features</span>
-          </div>
-          <div className="p-3 flex flex-col gap-1">
-            {([
-              { key: 'showTyreTemps' as const, label: 'Show Tyre Temperatures' },
-              { key: 'showDamage'    as const, label: 'Show Damage Indicators' },
-              { key: 'autoRecord'   as const, label: 'Auto-record Sessions'    },
-            ]).map(toggle => (
-              <label key={toggle.key} className="flex items-center justify-between cursor-pointer py-2 border-b border-motorsport-border/40 last:border-0">
-                <span className="text-[13px] text-motorsport-text">{toggle.label}</span>
-                <Toggle checked={config[toggle.key] as boolean} onChange={() => set(toggle.key, !config[toggle.key])} />
-              </label>
-            ))}
-          </div>
-        </div>
-
-      </div>
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="eng-label">{label}</span>
+      <span className="text-[13px] font-semibold text-right" style={{ color: color ?? '#E8EEF4' }}>{value}</span>
     </div>
   );
 }

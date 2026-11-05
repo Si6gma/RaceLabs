@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Lightbulb } from 'lucide-react';
+import { apiFetch } from '@/utils/api';
 
 interface LightsState {
   configured: boolean;
@@ -30,7 +31,7 @@ export default function LightsControl() {
   if (!state?.configured) return null;
 
   const post = (patch: Partial<LightsState>) =>
-    fetch('/api/lights', {
+    apiFetch('/api/lights', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -50,17 +51,17 @@ export default function LightsControl() {
 
   const test = () => {
     setState({ ...state, testing: true });
-    fetch('/api/lights/test', { method: 'POST' }).then(refresh).catch(() => {});
+    apiFetch('/api/lights/test', { method: 'POST' }).then(refresh).catch(() => {});
   };
 
   const off = !state.enabled;
 
   return (
-    <div className="flex items-center border border-motorsport-border">
+    <div className="flex items-center h-full border-r border-motorsport-border">
       <button
         onClick={toggle}
         title={state.enabled ? 'Race lights on' : 'Race lights off'}
-        className={`flex items-center gap-1.5 px-2.5 h-7 text-[12px] font-bold tracking-wide uppercase transition-colors ${
+        className={`flex items-center gap-1.5 px-3 h-full text-[12px] font-bold tracking-wide uppercase transition-colors ${
           state.enabled
             ? 'bg-motorsport-orange/15 text-motorsport-orange hover:bg-motorsport-orange/25'
             : 'bg-transparent text-motorsport-muted hover:text-motorsport-text'
@@ -70,7 +71,7 @@ export default function LightsControl() {
         Lights
       </button>
       <label
-        className={`flex items-center gap-2 px-2.5 h-7 border-l border-motorsport-border transition-opacity ${off ? 'opacity-40' : ''}`}
+        className={`flex items-center gap-2 px-3 h-full border-l border-motorsport-border transition-opacity ${off ? 'opacity-40' : ''}`}
         title="Lamp brightness for every effect"
       >
         <input
@@ -91,7 +92,7 @@ export default function LightsControl() {
         onClick={test}
         disabled={off || state.testing}
         title="Cycle the lamps through every phase (about a minute). Not while the game is live."
-        className={`px-2.5 h-7 border-l border-motorsport-border text-[12px] font-bold tracking-wide uppercase transition-colors ${
+        className={`px-3 h-full border-l border-motorsport-border text-[12px] font-bold tracking-wide uppercase transition-colors ${
           state.testing
             ? 'text-motorsport-orange cursor-wait'
             : off ? 'text-motorsport-muted opacity-40 cursor-default' : 'text-motorsport-muted hover:text-motorsport-text'

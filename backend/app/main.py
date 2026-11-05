@@ -7,9 +7,9 @@ import json
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Depends, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, PlainTextResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
@@ -20,6 +20,7 @@ from app.live_recorder import LiveRecorder
 from app.udp_receiver import receiver
 from app.ha_lights import HALights
 from app.csv_import_service import CSVImportService
+from app.track_alias_service import TrackAliasService
 from sqlalchemy.ext.asyncio import AsyncSession
 
 settings = get_settings()
@@ -76,6 +77,26 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+CONTROL_KEY_HEADER = "X-Control-Key"
+_CONTROL_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def control_key_allows(method: str, path: str, presented: Optional[str], control_key: str) -> bool:
+    """Whether a request may pass: reads are always open, writes under /api/ need the key."""
+    if not control_key or method not in _CONTROL_METHODS or not path.startswith("/api/"):
+        return True
+    return presented == control_key
+
+
+# Registered before CORS so CORS wraps it and the 403 carries CORS headers.
+@app.middleware("http")
+async def control_key_guard(request: Request, call_next):
+    presented = request.headers.get(CONTROL_KEY_HEADER)
+    if not control_key_allows(request.method, request.url.path, presented, settings.CONTROL_KEY):
+        return JSONResponse(status_code=403, content={"detail": "control key required"})
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -89,6 +110,12 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": settings.APP_NAME}
+
+
+@app.get("/api/access")
+async def get_access():
+    """Whether write requests need the control key."""
+    return {"protected": bool(settings.CONTROL_KEY)}
 
 
 # ============================================================================
@@ -258,6 +285,22 @@ async def get_imported_session(session_id: str, db: AsyncSession = Depends(get_d
     return session
 
 
+class SessionRename(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+@app.patch("/api/import/sessions/{session_id}")
+async def rename_imported_session(
+    session_id: str, body: SessionRename, db: AsyncSession = Depends(get_db)
+):
+    """Rename an imported or live session."""
+    service = CSVImportService(db)
+    session = await service.rename_session(session_id, body.name)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
 @app.get("/api/import/sessions/{session_id}/telemetry")
 async def get_session_telemetry(
     session_id: str,
@@ -322,6 +365,26 @@ async def export_session_csv(
         )
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+
+
+# ============================================================================
+# TRACK NICKNAMES
+# ============================================================================
+
+class TrackAliasUpdate(BaseModel):
+    nickname: str = Field(max_length=80)
+
+
+@app.get("/api/tracks/aliases")
+async def get_track_aliases(db: AsyncSession = Depends(get_db)):
+    """Every track nickname as {track_id: nickname}."""
+    return {"aliases": await TrackAliasService(db).get_aliases()}
+
+
+@app.put("/api/tracks/{track_id}/alias")
+async def set_track_alias(track_id: str, body: TrackAliasUpdate, db: AsyncSession = Depends(get_db)):
+    """Set a track nickname; an empty string removes it. Returns the full map."""
+    return {"aliases": await TrackAliasService(db).set_alias(track_id, body.nickname.strip())}
 
 
 # ============================================================================

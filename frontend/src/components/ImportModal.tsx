@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
+import { apiFetch } from '@/utils/api';
 import { Upload, X, FileSpreadsheet, CheckCircle, AlertTriangle, Loader2, FileUp } from 'lucide-react';
 import type { ImportProgress } from '@/types/telemetry';
 
@@ -52,7 +53,7 @@ export default function ImportModal() {
       const formData = new FormData();
       formData.append('file', file);
       
-      const res = await fetch(`${API_URL}/api/import/validate`, {
+      const res = await apiFetch(`${API_URL}/api/import/validate`, {
         method: 'POST',
         body: formData,
       });
@@ -108,7 +109,7 @@ export default function ImportModal() {
         formData.append('session_name', sessionName);
       }
       
-      const res = await fetch(`${API_URL}/api/import/csv`, {
+      const res = await apiFetch(`${API_URL}/api/import/csv`, {
         method: 'POST',
         body: formData,
       });

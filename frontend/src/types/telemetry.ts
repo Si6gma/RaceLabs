@@ -101,6 +101,8 @@ export interface CarStatus {
   ers_harvested_this_lap_mguh: number;
   ers_deployed_this_lap: number;
   max_rpm?: number;
+  // 0 none, 1 green, 2 blue, 3 yellow, 4 red
+  fia_flags?: number;
 }
 
 export interface CarDamage {
@@ -132,6 +134,7 @@ export interface SessionData {
 export interface SessionSummary {
   session_id: string;
   track: string;
+  track_id?: number;
   session_type: string;
   current_lap: number;
   best_lap_time: number | null;

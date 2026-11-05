@@ -210,6 +210,63 @@ class RecorderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((status["recorded_laps"], status["discarded"]), (0, 0))
         self.assertIsNone(status["session_id"])
 
+    async def test_flashback_rewinds_buffer_and_distances_stay_monotonic(self):
+        self.drive_lap(1, count=40)  # distances 0..3900
+        # Flashback to 2050 m, then drive on from there.
+        for i in range(20):
+            self.rec.on_sample(sample(1, 60 + i, lap_distance=2050.0 + i * 100), META)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        lap = self.saved[0]
+        distances = [s["lap_distance"] for s in lap.samples]
+        self.assertEqual(distances, sorted(distances))
+        # 21 kept (0..2000) + 20 after the rewind
+        self.assertEqual(len(lap.samples), 41)
+        self.assertEqual(lap.flashbacks, 1)
+        self.assertEqual(self.rec.status()["flashbacks"], 1)
+
+    async def test_flashback_past_lap_start_drops_everything_buffered(self):
+        self.drive_lap(1, count=30)
+        self.rec.on_sample(sample(1, 30, lap_distance=-5.0), META)
+        for i in range(1, 50):
+            self.rec.on_sample(sample(1, 30 + i, lap_distance=float(i) * 100), META)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        lap = self.saved[0]
+        self.assertEqual(len(lap.samples), 50)
+        self.assertEqual(lap.samples[0]["lap_distance"], -5.0)
+        self.assertEqual(lap.flashbacks, 1)
+
+    async def test_normal_lap_has_no_flashbacks(self):
+        self.drive_lap(1)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        self.assertEqual(self.saved[0].flashbacks, 0)
+        self.assertEqual(len(self.saved[0].samples), 50)
+        self.assertEqual(self.rec.status()["flashbacks"], 0)
+
+    async def test_small_backwards_jitter_is_not_a_flashback(self):
+        self.drive_lap(1, count=30)
+        self.rec.on_sample(sample(1, 30, lap_distance=2890.0), META)  # 10 m behind the last sample
+        for i in range(31, 50):
+            self.rec.on_sample(sample(1, i), META)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        self.assertEqual(self.saved[0].flashbacks, 0)
+        self.assertEqual(len(self.saved[0].samples), 50)
+
+    async def test_flashback_count_resets_with_start(self):
+        self.drive_lap(1, count=30)
+        self.rec.on_sample(sample(1, 30, lap_distance=500.0), META)
+        self.assertEqual(self.rec.status()["flashbacks"], 1)
+        self.rec.stop()
+        self.rec.start()
+        self.assertEqual(self.rec.status()["flashbacks"], 0)
+
     async def test_persist_failure_is_logged_not_raised(self):
         async def failing(lap: FinalizedLap):
             raise RuntimeError("db down")

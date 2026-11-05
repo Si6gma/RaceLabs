@@ -286,6 +286,15 @@ class CSVImportService:
             "laps": [self._lap_to_dict(lap) for lap in laps],
         }
 
+    async def rename_session(self, session_id: str, name: str) -> Optional[Dict[str, Any]]:
+        """Rename a session. Returns the updated session dict, or None if it does not exist."""
+        session = await self.db.get(ImportedSession, uuid.UUID(session_id))
+        if not session:
+            return None
+        session.name = name
+        await self.db.commit()
+        return await self.get_session(session_id)
+
     @staticmethod
     def _lap_to_dict(lap: ImportedLap) -> Dict[str, Any]:
         extra = lap.extra_data or {}

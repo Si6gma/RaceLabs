@@ -32,6 +32,8 @@ MIN_SAMPLES_PER_LAP = 20
 PARTIAL_START_MIN_M = 50.0
 PARTIAL_START_FRACTION = 0.02
 SAMPLE_FLUSH_THRESHOLD = 2000
+# A flashback rewinds lap_distance within the same lap. Smaller drops are jitter.
+FLASHBACK_REWIND_M = 20.0
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class FinalizedLap:
     valid: bool
     partial_start: bool
     pit_lap: bool
+    flashbacks: int
     samples: List[Dict[str, Any]]
     meta: Dict[str, Any]
     # time.time() minus session_time of the last sample: maps session_time onto the wall clock.
@@ -58,6 +61,20 @@ class _LapInProgress:
     # the lap counter never advances, so a change here is the only completion signal.
     start_last_lap_ms: int = 0
     samples: List[Dict[str, Any]] = field(default_factory=list)
+    flashbacks: int = 0
+
+
+def is_flashback(previous: Dict[str, Any], sample: Dict[str, Any]) -> bool:
+    """True when `sample` sits more than FLASHBACK_REWIND_M behind `previous` on the same lap."""
+    if previous.get("lap_num") != sample.get("lap_num"):
+        return False
+    drop = float(previous.get("lap_distance") or 0) - float(sample.get("lap_distance") or 0)
+    return drop > FLASHBACK_REWIND_M
+
+
+def rewind_samples(samples: List[Dict[str, Any]], lap_distance: float) -> List[Dict[str, Any]]:
+    """The samples the game kept after flashing back to `lap_distance`."""
+    return [s for s in samples if float(s.get("lap_distance") or 0) < lap_distance]
 
 
 def finalize_lap(
@@ -87,6 +104,7 @@ def finalize_lap(
         valid=not any(s.get("current_lap_invalid") for s in samples),
         partial_start=float(samples[0].get("lap_distance") or 0) > partial_threshold,
         pit_lap=any((s.get("pit_status") or 0) > 0 for s in samples),
+        flashbacks=lap.flashbacks,
         samples=list(samples),
         meta=dict(lap.meta),
         wall_offset=wall_offset,
@@ -140,6 +158,7 @@ class LiveRecorder:
         self._current: Optional[_LapInProgress] = None
         self._recorded_laps = 0
         self._discarded = 0
+        self._flashbacks = 0
         self._last_discard_reason: Optional[str] = None
 
     # ----- control -----
@@ -161,6 +180,7 @@ class LiveRecorder:
             "session_uid": self._session_uid,
             "recorded_laps": self._recorded_laps,
             "discarded": self._discarded,
+            "flashbacks": self._flashbacks,
             "last_discard_reason": self._last_discard_reason,
         }
 
@@ -190,6 +210,7 @@ class LiveRecorder:
             if self._current is not None:
                 self._discard("session_uid changed")
             self._recorded_laps = 0
+            self._flashbacks = 0
         self._session_uid = uid
 
         last_lap_ms = int(sample.get("last_lap_time_ms") or 0)
@@ -214,9 +235,20 @@ class LiveRecorder:
             self._discard(f"lap number jumped from {current.lap_number} to {lap_num}")
             self._current = _LapInProgress(lap_num, dict(meta), last_lap_ms)
 
-        self._current.samples.append(sample)
+        current = self._current
+        if current.samples and is_flashback(current.samples[-1], sample):
+            self._flashback(current, float(sample.get("lap_distance") or 0))
+        current.samples.append(sample)
 
     # ----- internals -----
+
+    def _flashback(self, lap: _LapInProgress, lap_distance: float):
+        kept = rewind_samples(lap.samples, lap_distance)
+        dropped = len(lap.samples) - len(kept)
+        lap.samples = kept
+        lap.flashbacks += 1
+        self._flashbacks += 1
+        logger.info(f"Live recorder flashback on lap {lap.lap_number}: dropped {dropped} samples")
 
     def _discard(self, reason: str):
         current = self._current
@@ -270,6 +302,7 @@ class LiveRecorder:
                         "sample_count": len(sample_dicts),
                         "partial_start": lap.partial_start,
                         "pit_lap": lap.pit_lap,
+                        "flashbacks": lap.flashbacks,
                         "source": "live",
                     },
                     resampled_data=resample_lap(sample_dicts),

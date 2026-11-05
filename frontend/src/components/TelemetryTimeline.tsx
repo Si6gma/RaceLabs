@@ -32,11 +32,19 @@ function buildDataPoints(): DataPoint[] {
   const currentLap = currentFrame?.lap?.current_lap_num;
   if (!frameHistory.length || currentLap == null) return [];
 
-  const seen = new Set<number>();
-  const out: DataPoint[] = [];
+  let seen = new Set<number>();
+  let out: DataPoint[] = [];
+  let lastDist = -Infinity;
   for (const f of frameHistory) {
     if (f.lap?.current_lap_num !== currentLap) continue;
     if (f.lap.lap_distance == null || !f.telemetry) continue;
+    // A flashback rewinds the lap: throw away what was driven past this point
+    // so the re-driven stretch replaces it instead of being skipped.
+    if (f.lap.lap_distance < lastDist - 20) {
+      out = out.filter(p => p.dist < f.lap!.lap_distance);
+      seen = new Set(out.map(p => p.dist));
+    }
+    lastDist = f.lap.lap_distance;
     const bucket = Math.round(f.lap.lap_distance / 5) * 5;
     if (seen.has(bucket)) continue;
     seen.add(bucket);

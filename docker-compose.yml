@@ -28,6 +28,9 @@ services:
       # Home Assistant runs on the host network. The token comes from .env.lights.
       - HA_URL=http://host.docker.internal:8123
       - LIGHTS_STATE_FILE=/app/state/lights.json
+      # Set in .env to require X-Control-Key on every write (recording, lights,
+      # imports, renames, deletes). Empty keeps the server open.
+      - CONTROL_KEY=${CONTROL_KEY:-}
     env_file:
       - path: .env.lights
         required: false

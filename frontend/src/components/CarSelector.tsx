@@ -1,12 +1,8 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import { ChevronDown, Lock } from 'lucide-react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
-
-// Team id → short name (matches the ids used for TEAM_COLORS in TrackMapCanvas)
-const TEAM_NAMES: Record<number, string> = {
-  0: 'Mercedes', 1: 'Ferrari', 2: 'Red Bull', 3: 'Williams', 4: 'Aston Martin',
-  5: 'Alpine', 6: 'AlphaTauri', 7: 'Haas', 8: 'McLaren', 9: 'Alfa Romeo', 85: 'MyTeam',
-};
+import { TEAM_NAMES } from '@/utils/teams';
+import DriverTag from '@/components/DriverTag';
 
 // Picks which car the dashboard follows. Lives at the top of the timing tower
 // so the name sits directly above the numbers it belongs to.
@@ -68,10 +64,9 @@ function CarSelector() {
         aria-expanded={open}
         className="w-full flex items-center justify-between gap-2 px-3 h-9 text-left hover:bg-motorsport-surface transition-colors"
       >
-        <span className="flex items-baseline gap-2 min-w-0">
-          <span className={`text-[15px] font-bold tracking-wide truncate ${spectating ? 'text-motorsport-cyan' : 'text-motorsport-text'}`}>
-            {title}
-          </span>
+        <span className="flex items-center gap-2 min-w-0">
+          {viewed && <DriverTag name={viewed.name} teamId={viewed.team_id} />}
+          <span className="text-[15px] font-bold tracking-wide truncate text-motorsport-text">{title}</span>
           {viewed && (
             <span className="text-[12px] text-motorsport-muted font-semibold truncate">
               {spectating ? TEAM_NAMES[viewed.team_id] ?? '' : 'you'}
@@ -100,6 +95,7 @@ function CarSelector() {
               key={p.index}
               selected={selectedCarIndex === p.index}
               name={p.name}
+              teamId={p.team_id}
               number={p.race_number}
               detail={[TEAM_NAMES[p.team_id], p.ai_controlled ? 'AI' : null].filter(Boolean).join(' · ')}
               locked={!p.telemetry_public}
@@ -113,9 +109,9 @@ function CarSelector() {
 }
 
 function Option({
-  selected, name, number, detail, locked, onPick,
+  selected, name, teamId, number, detail, locked, onPick,
 }: {
-  selected: boolean; name: string; number?: number; detail: string; locked?: boolean; onPick: () => void;
+  selected: boolean; name: string; teamId?: number; number?: number; detail: string; locked?: boolean; onPick: () => void;
 }) {
   return (
     <li
@@ -126,7 +122,10 @@ function Option({
         selected ? 'border-motorsport-orange bg-motorsport-orange/[0.08]' : 'border-transparent hover:bg-motorsport-surface'
       }`}
     >
-      <span className="font-telemetry text-[12px] tabular-nums text-motorsport-muted w-6 shrink-0">
+      {teamId !== undefined
+        ? <DriverTag name={name} teamId={teamId} size="sm" />
+        : <span className="w-[38px] shrink-0" />}
+      <span className="font-telemetry text-[12px] tabular-nums text-motorsport-muted w-7 shrink-0">
         {number !== undefined ? `#${number}` : ''}
       </span>
       <span className="text-[14px] font-bold tracking-wide truncate text-motorsport-text">

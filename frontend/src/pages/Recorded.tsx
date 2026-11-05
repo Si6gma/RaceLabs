@@ -9,6 +9,11 @@ import ZoomRangeBar from '@/components/ZoomRangeBar';
 import ImportModal from '@/components/ImportModal';
 import { normalizeImportedSamples, type TelemetryPoint } from '@/utils/telemetryAdapter';
 import { formatTime } from '@/utils/formatters';
+import { apiFetch } from '@/utils/api';
+import { deltaTrace, segmentTimes, detectCorners, cornerMetrics, lapStats } from '@/utils/lapAnalysis';
+
+const SEGMENTS = 12;
+const PURPLE = '#B388FF';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
@@ -45,8 +50,11 @@ export default function Recorded() {
   const setImportedSessions = useTelemetryStore(s => s.setImportedSessions);
   const removeImportedSession = useTelemetryStore(s => s.removeImportedSession);
   const setImportModalOpen = useTelemetryStore(s => s.setImportModalOpen);
+  const trackAliases = useTelemetryStore(s => s.trackAliases);
+  const trackLabel = (track: string, trackId?: string) => (trackId && trackAliases[trackId]) || track;
 
   const [query, setQuery] = useState('');
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [session, setSession] = useState<(ImportedSession & { laps: ImportedLap[] }) | null>(null);
   const [laps, setLaps] = useState<LoadedLap[]>([]);
   const [loadingLaps, setLoadingLaps] = useState(false);
@@ -157,6 +165,13 @@ export default function Recorded() {
     setHoverPosition(0);
     hoverPositionRef.current = 0;
     setCursorLocked(false);
+    // Two laps or more: the delta trace is the first thing to read, so draw it.
+    setVisibleChannels(prev => {
+      const next = new Set(prev);
+      if (selected.length >= 2) next.add('delta_time'); else next.delete('delta_time');
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionKey]);
 
   const effectivePosition = cursorLocked ? lockedPosition : hoverPosition;
@@ -284,14 +299,51 @@ export default function Recorded() {
   const deleteSession = async () => {
     if (!session) return;
     if (!confirmDelete) { setConfirmDelete(true); return; }
-    const res = await fetch(`${API_URL}/api/import/sessions/${session.id}`, { method: 'DELETE' });
+    const res = await apiFetch(`${API_URL}/api/import/sessions/${session.id}`, { method: 'DELETE' });
     if (res.ok) {
       removeImportedSession(session.id);
       navigate('/recorded');
     }
   };
 
-  const graphLaps = selectedLaps.map(l => ({ data: l.samples, color: colourOf(l.meta.id) }));
+  const renameSession = async (name: string) => {
+    setRenaming(null);
+    const trimmed = name.trim();
+    if (!session || !trimmed || trimmed === session.name) return;
+    const res = await apiFetch(`${API_URL}/api/import/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (res.ok) {
+      setSession({ ...session, name: trimmed });
+      setImportedSessions(importedSessions.map(s => (s.id === session.id ? { ...s, name: trimmed } : s)));
+    }
+  };
+
+  // The first lap picked is the reference: every other lap's delta is measured against it.
+  const analysis = useMemo(() => {
+    const ref = selectedLaps[0];
+    if (!ref) return null;
+    const corners = detectCorners(ref.samples);
+    return {
+      corners,
+      perLap: selectedLaps.map(lap => ({
+        id: lap.meta.id,
+        delta: lap === ref ? null : deltaTrace(ref.samples, lap.samples),
+        segments: segmentTimes(lap.samples, SEGMENTS),
+        stats: lapStats(lap.samples),
+        corners: corners.map(c => cornerMetrics(lap.samples, c)),
+      })),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLaps, selectionKey]);
+
+  const graphLaps = selectedLaps.map((l, i) => {
+    const delta = analysis?.perLap[i]?.delta;
+    const data = delta ? l.samples.map((s, k) => ({ ...s, delta_time: delta[k] })) : l.samples.map(s => ({ ...s, delta_time: 0 }));
+    return { data, color: colourOf(l.meta.id) };
+  });
   const tooltipLap = selectedLaps[0];
   const tooltipSample = tooltipLap ? sampleAt(tooltipLap, effectivePosition) : null;
 
@@ -337,13 +389,15 @@ export default function Recorded() {
                   }`}
                 >
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[15px] font-bold tracking-wide text-motorsport-text truncate">{s.track}</span>
+                    <span className="text-[15px] font-bold tracking-wide text-motorsport-text truncate">{s.name || trackLabel(s.track, s.track_id)}</span>
                     <span className="font-telemetry text-[13px] tabular-nums text-motorsport-purple shrink-0">
                       {s.best_lap_time_ms ? formatTime(s.best_lap_time_ms) : ''}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between gap-2 mt-1 text-[12px] text-motorsport-muted">
                     <span className="truncate">
+                      <span className="font-semibold">{trackLabel(s.track, s.track_id)}</span>
+                      <span className="mx-1.5">·</span>
                       <span className="font-semibold uppercase tracking-wide">{s.session_type}</span>
                       <span className="mx-1.5">·</span>
                       {s.source === 'live' ? 'recorded' : 'csv'}
@@ -360,8 +414,29 @@ export default function Recorded() {
 
         {session && (
           <div className="telemetry-panel flex flex-col min-h-0 overflow-hidden">
-            <div className="flex items-center justify-between px-3 h-10 border-b border-motorsport-border shrink-0">
-              <span className="text-[15px] font-bold tracking-wide text-motorsport-text truncate">{session.name}</span>
+            <div className="flex items-center justify-between gap-2 px-3 h-10 border-b border-motorsport-border shrink-0">
+              {renaming != null ? (
+                <input
+                  autoFocus
+                  value={renaming}
+                  maxLength={80}
+                  onChange={e => setRenaming(e.target.value)}
+                  onBlur={e => renameSession(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') renameSession((e.target as HTMLInputElement).value);
+                    if (e.key === 'Escape') setRenaming(null);
+                  }}
+                  className="flex-1 min-w-0 bg-motorsport-dark border border-motorsport-border-strong px-2 h-7 text-[14px] font-bold text-motorsport-text focus:outline-none focus:border-motorsport-orange"
+                />
+              ) : (
+                <button
+                  onClick={() => setRenaming(session.name)}
+                  title="Click to rename this session"
+                  className="text-[15px] font-bold tracking-wide text-motorsport-text truncate text-left hover:text-motorsport-orange transition-colors"
+                >
+                  {session.name}
+                </button>
+              )}
               <div className="flex items-center gap-1 shrink-0">
                 <button onClick={exportSession} title="Export CSV" className="icon-btn"><Download className="w-4 h-4" /></button>
                 <button
@@ -387,23 +462,27 @@ export default function Recorded() {
                   <button
                     key={meta.id}
                     onClick={() => toggleLap(meta.id)}
-                    className={`w-full flex items-center gap-3 px-3 h-10 border-l-2 border-b border-b-motorsport-border/60 text-left transition-colors ${
+                    className={`w-full flex items-center gap-3 px-3 h-12 border-l-2 border-b border-b-motorsport-border/60 text-left transition-colors ${
                       on ? 'bg-motorsport-surface' : 'hover:bg-motorsport-surface/60'
                     }`}
                     style={{ borderLeftColor: colour ?? 'transparent' }}
                   >
-                    <span className="font-telemetry text-[13px] tabular-nums text-motorsport-muted w-7 shrink-0">{meta.lap_number}</span>
-                    <span
-                      className={`font-telemetry text-[16px] font-semibold tabular-nums leading-none ${meta.valid ? '' : 'line-through'}`}
-                      style={{ color: isBest ? '#B388FF' : meta.valid ? '#E8EEF4' : '#9AACBE' }}
-                    >
-                      {lapTime(meta.lap_time_ms)}
+                    <span className="font-telemetry text-[13px] tabular-nums text-motorsport-muted w-6 shrink-0">{meta.lap_number}</span>
+                    <span className="flex flex-col gap-1 min-w-0">
+                      <span
+                        className={`font-telemetry text-[16px] font-semibold tabular-nums leading-none ${meta.valid ? '' : 'line-through'}`}
+                        style={{ color: isBest ? PURPLE : meta.valid ? '#E8EEF4' : '#9AACBE' }}
+                      >
+                        {lapTime(meta.lap_time_ms)}
+                      </span>
+                      <span className="font-telemetry text-[12px] tabular-nums leading-none text-motorsport-muted">
+                        {[meta.sector1_ms, meta.sector2_ms, meta.sector3_ms].map(sectorTime).join('  ')}
+                      </span>
                     </span>
-                    <span className="ml-auto flex items-center gap-1.5 text-[12px] text-motorsport-muted">
+                    <span className="ml-auto flex items-center gap-1.5 text-[12px] text-motorsport-muted shrink-0">
                       {!meta.valid && <span className="text-motorsport-red font-semibold">invalid</span>}
                       {meta.partial && <span>partial</span>}
                       {meta.pit_lap && <span>pit</span>}
-                      {meta.max_speed > 0 && <span className="font-telemetry tabular-nums">{meta.max_speed.toFixed(0)}</span>}
                     </span>
                   </button>
                 );
@@ -457,56 +536,149 @@ export default function Recorded() {
         </div>
       </div>
 
-      {/* ── Right: the selected laps side by side, and what to draw ── */}
-      <div className="w-[300px] shrink-0 telemetry-panel flex flex-col min-h-0 overflow-hidden">
+      {/* ── Right: the selected laps side by side, then where the time goes ── */}
+      <div className="w-[360px] shrink-0 telemetry-panel flex flex-col min-h-0 overflow-hidden">
         <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-motorsport-border">
           {selectedLaps.length === 0 && (
             <div className="px-3 py-6 text-[13px] text-motorsport-muted leading-relaxed">
-              Select up to {MAX_SELECTED} laps to overlay them. The first lap picked is the reference.
+              Select up to {MAX_SELECTED} laps to overlay them. The first lap picked is the reference every other lap is measured against.
             </div>
           )}
-          {selectedLaps.map(({ meta }) => {
+
+          {/* Lap cards: time, delta to the fastest, and how the lap was driven */}
+          {selectedLaps.map(({ meta }, i) => {
             const ms = meta.lap_time_ms ?? 0;
             const delta = fastestSelectedMs != null && ms > 0 ? ms - fastestSelectedMs : null;
+            const stats = analysis?.perLap[i]?.stats;
             return (
-              <div key={meta.id} className="px-3 py-3 flex flex-col gap-2.5">
+              <div key={meta.id} className="px-3 py-3 flex flex-col gap-2">
                 <div className="flex items-baseline justify-between">
                   <span className="flex items-baseline gap-2">
                     <span className="w-2.5 h-2.5 inline-block translate-y-px" style={{ backgroundColor: colourOf(meta.id) }} />
                     <span className="text-[14px] font-bold tracking-wide text-motorsport-text">Lap {meta.lap_number}</span>
+                    {i === 0 && <span className="text-[12px] text-motorsport-muted font-semibold">reference</span>}
                   </span>
-                  <span className="font-telemetry text-[13px] tabular-nums leading-none" style={{ color: delta == null ? '#5F7183' : delta === 0 ? '#B388FF' : '#FF2044' }}>
-                    {delta == null ? '' : delta === 0 ? 'fastest' : `+${(delta / 1000).toFixed(3)}`}
+                  <span className="flex items-baseline gap-3">
+                    <span className="font-telemetry text-[13px] tabular-nums leading-none" style={{ color: delta == null ? '#5F7183' : delta === 0 ? PURPLE : '#FF2044' }}>
+                      {delta == null ? '' : delta === 0 ? 'fastest' : `+${(delta / 1000).toFixed(3)}`}
+                    </span>
+                    <span className={`font-telemetry text-[20px] font-bold tabular-nums leading-none ${meta.valid ? 'text-motorsport-text' : 'text-motorsport-muted line-through'}`}>
+                      {lapTime(meta.lap_time_ms)}
+                    </span>
                   </span>
                 </div>
-                <span className={`font-telemetry text-[28px] font-bold tabular-nums leading-none ${meta.valid ? 'text-motorsport-text' : 'text-motorsport-muted line-through'}`}>
-                  {lapTime(meta.lap_time_ms)}
-                </span>
-                <div className="grid grid-cols-3 gap-2">
-                  {[meta.sector1_ms, meta.sector2_ms, meta.sector3_ms].map((s, i) => (
-                    <div key={i} className="flex flex-col gap-1">
-                      <span className="eng-label">S{i + 1}</span>
-                      <span className="font-telemetry text-[14px] tabular-nums leading-none text-motorsport-text">{sectorTime(s)}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="flex flex-col gap-1">
-                    <span className="eng-label">Top</span>
-                    <span className="font-telemetry text-[14px] tabular-nums leading-none text-motorsport-text">{meta.max_speed > 0 ? `${meta.max_speed.toFixed(0)}` : '--'}</span>
+                {stats && (
+                  <div className="grid grid-cols-4 gap-2">
+                    <Stat label="Full throttle" value={`${stats.fullThrottlePct.toFixed(0)}%`} />
+                    <Stat label="Braking" value={`${stats.brakingPct.toFixed(0)}%`} />
+                    <Stat label="Coasting" value={`${stats.coastingPct.toFixed(0)}%`} />
+                    <Stat label="Top" value={meta.max_speed > 0 ? meta.max_speed.toFixed(0) : '--'} />
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="eng-label">Avg</span>
-                    <span className="font-telemetry text-[14px] tabular-nums leading-none text-motorsport-text">{meta.avg_speed > 0 ? `${meta.avg_speed.toFixed(0)}` : '--'}</span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="eng-label">Min</span>
-                    <span className="font-telemetry text-[14px] tabular-nums leading-none text-motorsport-text">{meta.min_speed > 0 ? `${meta.min_speed.toFixed(0)}` : '--'}</span>
-                  </div>
-                </div>
+                )}
               </div>
             );
           })}
+
+          {/* Segments: the lap in twelve equal slices, fastest per slice in purple */}
+          {analysis && (
+            <div className="px-3 py-3 flex flex-col gap-2">
+              <div className="flex items-baseline justify-between">
+                <span className="eng-label">Segments</span>
+                <span className="text-[12px] text-motorsport-muted font-semibold">seconds, fastest in purple</span>
+              </div>
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="text-left font-telemetry text-[11px] font-semibold text-motorsport-muted pb-1 w-6">#</th>
+                    {selectedLaps.map(l => (
+                      <th key={l.meta.id} className="text-right font-telemetry text-[11px] font-semibold pb-1" style={{ color: colourOf(l.meta.id) }}>L{l.meta.lap_number}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Array.from({ length: SEGMENTS }, (_, k) => {
+                    const times = analysis.perLap.map(p => p.segments[k]);
+                    const best = Math.min(...times.filter((t): t is number => t != null));
+                    return (
+                      <tr key={k} className="border-t border-motorsport-border/50">
+                        <td className="font-telemetry text-[12px] tabular-nums text-motorsport-muted py-[3px]">{k + 1}</td>
+                        {times.map((t, i) => (
+                          <td key={i} className="text-right font-telemetry text-[13px] tabular-nums py-[3px]" style={{ color: t == null ? '#5F7183' : t === best ? PURPLE : '#E8EEF4' }}>
+                            {t == null ? '--' : t.toFixed(2)}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                  {selectedLaps.length >= 2 && (() => {
+                    const ideal = Array.from({ length: SEGMENTS }, (_, k) => {
+                      const ts = analysis.perLap.map(p => p.segments[k]).filter((t): t is number => t != null);
+                      return ts.length ? Math.min(...ts) : null;
+                    });
+                    const sum = ideal.every(t => t != null) ? ideal.reduce((a, t) => a + (t ?? 0), 0) : null;
+                    return (
+                      <tr className="border-t border-motorsport-border-strong">
+                        <td className="text-[12px] font-semibold text-motorsport-muted py-1.5" colSpan={selectedLaps.length}>Theoretical best</td>
+                        <td className="text-right font-telemetry text-[13px] font-semibold tabular-nums py-1.5" style={{ color: PURPLE }}>
+                          {sum == null ? '--' : formatTime(Math.round(sum * 1000))}
+                        </td>
+                      </tr>
+                    );
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Corners on the reference lap: minimum speed and braking point per lap */}
+          {analysis && analysis.corners.length > 0 && (
+            <div className="px-3 py-3 flex flex-col gap-2">
+              <div className="flex items-baseline justify-between">
+                <span className="eng-label">Corners</span>
+                <span className="text-[12px] text-motorsport-muted font-semibold">min km/h · brake point m</span>
+              </div>
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="text-left font-telemetry text-[11px] font-semibold text-motorsport-muted pb-1">at</th>
+                    {selectedLaps.map(l => (
+                      <th key={l.meta.id} className="text-right font-telemetry text-[11px] font-semibold pb-1" style={{ color: colourOf(l.meta.id) }}>L{l.meta.lap_number}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {analysis.corners.map((c, k) => {
+                    const rows = analysis.perLap.map(p => p.corners[k]);
+                    const fastest = Math.max(...rows.map(r => r.minSpeed));
+                    const refBrake = rows[0]?.brakeOn ?? null;
+                    return (
+                      <tr key={k} className="border-t border-motorsport-border/50 align-top">
+                        <td className="font-telemetry text-[12px] tabular-nums text-motorsport-muted py-[3px] whitespace-nowrap">
+                          {c.distance >= 1000 ? `${(c.distance / 1000).toFixed(2)} km` : `${Math.round(c.distance)} m`}
+                        </td>
+                        {rows.map((r, i) => {
+                          const brakeDiff = r.brakeOn != null && refBrake != null && i > 0 ? r.brakeOn - refBrake : null;
+                          return (
+                            <td key={i} className="text-right py-[3px]">
+                              <span className="font-telemetry text-[13px] tabular-nums block" style={{ color: r.minSpeed === fastest ? PURPLE : '#E8EEF4' }}>
+                                {r.minSpeed.toFixed(0)}
+                              </span>
+                              <span className="font-telemetry text-[11px] tabular-nums block" style={{ color: brakeDiff == null ? '#5F7183' : brakeDiff > 0 ? '#00E85A' : '#FF2044' }}>
+                                {r.brakeOn == null ? '--' : i === 0 ? `${Math.round(r.brakeOn)}` : `${brakeDiff! >= 0 ? '+' : ''}${Math.round(brakeDiff!)}`}
+                              </span>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <span className="text-[12px] text-motorsport-muted leading-snug">
+                Brake point is metres from the start line on the reference lap; other laps show how much later (+) or earlier (−) they braked.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Channels drawn on the trace */}
@@ -530,6 +702,15 @@ export default function Recorded() {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1 min-w-0">
+      <span className="eng-label truncate">{label}</span>
+      <span className="font-telemetry text-[14px] tabular-nums leading-none text-motorsport-text">{value}</span>
     </div>
   );
 }

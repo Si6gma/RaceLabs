@@ -67,6 +67,8 @@ def _min(a: Optional[float], b: Optional[float]) -> Optional[float]:
 DRS_ZONE_MATCH_M = 400.0
 # A DRS span longer than this is not one zone (a wrong wing state, a stale start).
 DRS_ZONE_MAX_LENGTH_M = 1500.0
+# A span shorter than this is a flap flicker, not a zone.
+DRS_ZONE_MIN_LENGTH_M = 50.0
 
 Zone = Dict[str, Optional[float]]
 
@@ -76,17 +78,24 @@ def drs_span(start: float, closed_at: float) -> Optional[Zone]:
     Closing at or before the start means the car wrapped past the line: the end is unknown."""
     if closed_at <= start:
         return {"start": start, "end": None}
-    if closed_at - start > DRS_ZONE_MAX_LENGTH_M:
+    if not DRS_ZONE_MIN_LENGTH_M <= closed_at - start <= DRS_ZONE_MAX_LENGTH_M:
         return None
     return {"start": start, "end": closed_at}
 
 
+def _same_zone(known: Zone, zone: Zone) -> bool:
+    """Starts within DRS_ZONE_MATCH_M, or the new span opens inside the known zone."""
+    if abs(known["start"] - zone["start"]) < DRS_ZONE_MATCH_M:
+        return True
+    return known["end"] is not None and known["start"] <= zone["start"] <= known["end"]
+
+
 def merge_drs_zones(stored: List[Zone], new: List[Zone]) -> List[Zone]:
-    """Zones matched by start within DRS_ZONE_MATCH_M keep the smaller start and the larger end;
-    unmatched new zones are added."""
+    """Zones matched by start within DRS_ZONE_MATCH_M, or starting inside a known zone, keep the
+    smaller start and the larger end; unmatched new zones are added."""
     merged = [dict(z) for z in stored]
     for zone in new:
-        match = next((m for m in merged if abs(m["start"] - zone["start"]) < DRS_ZONE_MATCH_M), None)
+        match = next((m for m in merged if _same_zone(m, zone)), None)
         if match is None:
             merged.append(dict(zone))
             continue

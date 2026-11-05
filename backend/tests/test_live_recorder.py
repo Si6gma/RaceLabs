@@ -441,3 +441,89 @@ class FieldAndGridTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+TT_META = {**META, "session_type_id": 13, "session_type": "Time Trial"}
+
+
+class GhostTest(unittest.IsolatedAsyncioTestCase):
+    """Time trial ghosts: the other slots replaying a lap. Each distinct ghost lap is saved once."""
+
+    def setUp(self):
+        self.saved: List[FinalizedLap] = []
+
+        async def persist(lap: FinalizedLap):
+            self.saved.append(lap)
+
+        self.rec = LiveRecorder(session_factory=None, persist=persist)
+        self.rec.start()
+
+    def drive_ghost(self, index: int, lap_num: int, count: int = 50, lap_time_ms: int = 0, meta=TT_META):
+        for i in range(count):
+            self.rec.on_ghost_sample(index, sample(lap_num, i, last_lap_time_ms=lap_time_ms), meta)
+
+    async def test_ghost_lap_saved_once_with_its_slot_and_lap_time(self):
+        self.drive_ghost(3, 1)
+        self.drive_ghost(3, 2, lap_time_ms=83873)
+        self.drive_ghost(3, 3, lap_time_ms=83873)
+        self.drive_ghost(3, 4, lap_time_ms=83873)
+        await self.rec.drain()
+        self.assertEqual(len(self.saved), 1)
+        self.assertEqual(self.saved[0].ghost, {"car_index": 3, "lap_time_ms": 83873})
+        self.assertEqual(self.saved[0].lap_time_ms, 83873)
+        self.assertEqual(self.rec.status()["ghost_laps"], 1)
+        self.assertEqual(self.rec.status()["recorded_laps"], 0)
+
+    async def test_ghost_sample_clock_runs_from_its_own_lap_start(self):
+        # The game mirrors the player's lap clock onto ghosts, so session_time is the clock.
+        self.drive_ghost(3, 1)
+        self.drive_ghost(3, 2, lap_time_ms=83873)
+        await self.rec.drain()
+        times = [s["current_lap_time_ms"] for s in self.saved[0].samples]
+        self.assertEqual((times[0], times[1], times[-1]), (0, 1000, 49000))
+
+    async def test_partial_first_ghost_lap_skipped_next_loop_saved(self):
+        for i in range(10, 50):
+            self.rec.on_ghost_sample(3, sample(1, i), TT_META)
+        self.drive_ghost(3, 2, lap_time_ms=83873)
+        self.drive_ghost(3, 3, lap_time_ms=83873)
+        await self.rec.drain()
+        self.assertEqual([lap.lap_number for lap in self.saved], [2])
+
+    async def test_new_ghost_time_is_another_lap(self):
+        self.drive_ghost(3, 1)
+        self.drive_ghost(3, 2, lap_time_ms=83873)
+        self.drive_ghost(3, 3, lap_time_ms=84000)
+        self.drive_ghost(3, 4, lap_time_ms=84000)
+        await self.rec.drain()
+        self.assertEqual([lap.lap_time_ms for lap in self.saved], [83873, 84000])
+
+    async def test_ghosts_outside_time_trial_are_ignored(self):
+        self.drive_ghost(3, 1, meta=META)
+        self.drive_ghost(3, 2, lap_time_ms=83873, meta=META)
+        await self.rec.drain()
+        self.assertEqual(self.saved, [])
+
+    async def test_moving_ghosts_join_field_frames_frozen_ones_do_not(self):
+        self.rec.on_sample(sample(1, 0), TT_META)
+        self.rec.on_ghost_sample(3, sample(1, 0), TT_META)
+        self.rec.on_ghost_sample(3, sample(1, 1), TT_META)
+        self.rec.on_ghost_sample(7, sample(1, 5), TT_META)
+        self.rec.on_ghost_sample(7, sample(1, 5), TT_META)
+        lap_all = [{"lap_distance": 0.0, "car_position": 1, "current_lap_num": 1, "result_status": 2}]
+        lap_all += [{"lap_distance": 100.0 * i, "car_position": 1, "current_lap_num": 1, "result_status": 0} for i in range(1, 22)]
+        self.rec.on_lap_all(lap_all, 100.0)
+        frame = self.rec._current.field_frames[-1]
+        self.assertEqual(frame["cars"][3], [300.0, 1, 1])
+        self.assertEqual(frame["cars"][7], [0, 0, 0])
+        self.assertEqual(frame["cars"][2], [0, 0, 0])
+
+    async def test_session_change_forgets_saved_ghosts(self):
+        self.rec.on_sample(sample(1, 0), TT_META)
+        self.drive_ghost(3, 1)
+        self.drive_ghost(3, 2, lap_time_ms=83873)
+        self.rec.on_sample(sample(1, 0), {**TT_META, "session_uid": "222"})
+        self.drive_ghost(3, 1, meta={**TT_META, "session_uid": "222"})
+        self.drive_ghost(3, 2, lap_time_ms=83873, meta={**TT_META, "session_uid": "222"})
+        await self.rec.drain()
+        self.assertEqual(len(self.saved), 2)

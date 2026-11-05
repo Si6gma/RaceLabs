@@ -315,6 +315,8 @@ class CSVImportService:
             "valid": bool(lap.valid),
             "partial": bool(extra.get("partial_start", False)),
             "pit_lap": bool(extra.get("pit_lap", extra.get("is_pit_lap", False))),
+            # Time-trial ghost laps: {"car_index", "lap_time_ms"}, None for the player's own.
+            "ghost": extra.get("ghost"),
             "valid_bin_count": lap.valid_bin_count,
             "total_bin_count": lap.total_bin_count,
             "max_speed": lap.max_speed,

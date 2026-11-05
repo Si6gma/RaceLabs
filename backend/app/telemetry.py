@@ -26,6 +26,46 @@ _PLAYER_KEYS = ("lap", "telemetry", "motion", "status", "session")
 _DRS_KEYS = ("lap_all", "status_all", "telemetry_all")
 # Learned sector lines are written at most this often per track.
 _SECTOR_SAVE_INTERVAL = 1.0
+TIME_TRIAL_TYPE_ID = 13
+
+
+def car_sample(lap: Dict[str, Any], tel: Dict[str, Any], motion: Dict[str, Any], status: Dict[str, Any], session_time: float) -> Dict[str, Any]:
+    """One car's latest state, flattened the way the recorder stores it."""
+    return {
+        "session_time": session_time,
+        "lap_num": lap.get("current_lap_num", 0),
+        "lap_distance": lap.get("lap_distance", 0.0),
+        "total_distance": lap.get("total_distance", 0.0),
+        "current_lap_time_ms": lap.get("current_lap_time_ms", 0),
+        "sector": lap.get("sector", 0),
+        "current_lap_invalid": bool(lap.get("current_lap_invalid", False)),
+        "driver_status": lap.get("driver_status", 0),
+        "pit_status": lap.get("pit_status", 0),
+        "result_status": lap.get("result_status", 0),
+        "sector1_ms": lap.get("sector1_time_minutes", 0) * 60000 + lap.get("sector1_time_ms", 0),
+        "sector2_ms": lap.get("sector2_time_minutes", 0) * 60000 + lap.get("sector2_time_ms", 0),
+        "last_lap_time_ms": lap.get("last_lap_time_ms", 0),
+        "speed": tel.get("speed", 0),
+        "throttle": tel.get("throttle", 0.0),
+        "brake": tel.get("brake", 0.0),
+        "steer": tel.get("steer", 0.0),
+        "gear": tel.get("gear", 0),
+        "rpm": tel.get("engine_rpm", 0),
+        "drs": tel.get("drs", 0),
+        "ers_store_energy": status.get("ers_store_energy", 0.0),
+        "g_force_lat": motion.get("g_force_lat", 0.0),
+        "g_force_lon": motion.get("g_force_lon", 0.0),
+        "g_force_vert": motion.get("g_force_vert", 0.0),
+        "world_pos_x": motion.get("world_pos_x", 0.0),
+        "world_pos_y": motion.get("world_pos_y", 0.0),
+        "world_pos_z": motion.get("world_pos_z", 0.0),
+        "car_position": lap.get("car_position", 0),
+        "tyre_compound": status.get("tyre_compound", 0),
+    }
+
+
+def _at(cars: List[Dict[str, Any]], index: int) -> Dict[str, Any]:
+    return cars[index] if index < len(cars) else {}
 
 
 @dataclass
@@ -135,10 +175,14 @@ class TelemetryPipeline:
             if "lap" in frame_dict:
                 self._update_lap(frame_dict["lap"])
 
+            if "motion_all" in frame_dict:
+                self._multicar["motion_all"] = frame_dict["motion_all"]
+
             if "lap_all" in frame_dict:
                 self._learn_sectors(frame_dict["lap_all"])
                 if self._recording and self.recorder:
                     self.recorder.on_lap_all(frame_dict["lap_all"], frame_dict.get("session_time", 0.0))
+                    self._feed_ghosts(frame_dict["lap_all"], frame_dict.get("session_time", 0.0))
 
             for key in _DRS_KEYS:
                 if key in frame_dict:
@@ -282,40 +326,29 @@ class TelemetryPipeline:
             self._sector_tasks.pop(track_id, None)
 
     def _player_sample(self, lap: Dict[str, Any]) -> Dict[str, Any]:
-        tel = self._player.get("telemetry") or {}
-        motion = self._player.get("motion") or {}
-        status = self._player.get("status") or {}
-        return {
-            "session_time": (self.current_frame or {}).get("session_time", 0.0),
-            "lap_num": lap.get("current_lap_num", 0),
-            "lap_distance": lap.get("lap_distance", 0.0),
-            "total_distance": lap.get("total_distance", 0.0),
-            "current_lap_time_ms": lap.get("current_lap_time_ms", 0),
-            "sector": lap.get("sector", 0),
-            "current_lap_invalid": bool(lap.get("current_lap_invalid", False)),
-            "driver_status": lap.get("driver_status", 0),
-            "pit_status": lap.get("pit_status", 0),
-            "result_status": lap.get("result_status", 0),
-            "sector1_ms": lap.get("sector1_time_minutes", 0) * 60000 + lap.get("sector1_time_ms", 0),
-            "sector2_ms": lap.get("sector2_time_minutes", 0) * 60000 + lap.get("sector2_time_ms", 0),
-            "last_lap_time_ms": lap.get("last_lap_time_ms", 0),
-            "speed": tel.get("speed", 0),
-            "throttle": tel.get("throttle", 0.0),
-            "brake": tel.get("brake", 0.0),
-            "steer": tel.get("steer", 0.0),
-            "gear": tel.get("gear", 0),
-            "rpm": tel.get("engine_rpm", 0),
-            "drs": tel.get("drs", 0),
-            "ers_store_energy": status.get("ers_store_energy", 0.0),
-            "g_force_lat": motion.get("g_force_lat", 0.0),
-            "g_force_lon": motion.get("g_force_lon", 0.0),
-            "g_force_vert": motion.get("g_force_vert", 0.0),
-            "world_pos_x": motion.get("world_pos_x", 0.0),
-            "world_pos_y": motion.get("world_pos_y", 0.0),
-            "world_pos_z": motion.get("world_pos_z", 0.0),
-            "car_position": lap.get("car_position", 0),
-            "tyre_compound": status.get("tyre_compound", 0),
-        }
+        return car_sample(
+            lap,
+            self._player.get("telemetry") or {},
+            self._player.get("motion") or {},
+            self._player.get("status") or {},
+            (self.current_frame or {}).get("session_time", 0.0),
+        )
+
+    def _feed_ghosts(self, lap_all: List[Dict[str, Any]], session_time: float):
+        """Time trial only: every other slot on track is a ghost, handed to the recorder
+        with its own telemetry and position. The recorder keeps the ones that move."""
+        if self.session_state is None or self.session_state.session_type_id != TIME_TRIAL_TYPE_ID:
+            return
+        player = self.session_state.player_car_index
+        tel_all = self._multicar.get("telemetry_all") or []
+        motion_all = self._multicar.get("motion_all") or []
+        status_all = self._multicar.get("status_all") or []
+        meta = self._recorder_meta()
+        for index, lap in enumerate(lap_all):
+            if index == player or float(lap.get("lap_distance") or 0) <= 0:
+                continue
+            sample = car_sample(lap, _at(tel_all, index), _at(motion_all, index), _at(status_all, index), session_time)
+            self.recorder.on_ghost_sample(index, sample, meta)
 
     def _recorder_meta(self) -> Dict[str, Any]:
         state = self.session_state

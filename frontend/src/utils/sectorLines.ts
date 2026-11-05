@@ -9,6 +9,9 @@ export interface DrsZone {
 
 // Zones further apart than this are different zones.
 const ZONE_MERGE_M = 400;
+// A span shorter than this is a flap flicker, not a zone; longer than the max is not one zone.
+const ZONE_MIN_M = 50;
+const ZONE_MAX_M = 1500;
 
 // DRS zones learned from the grid: each car's stretch with the flap open is a
 // span, spans that start near each other are one zone. Where cars open it is
@@ -43,15 +46,17 @@ export class DrsZoneLearner {
         // A span that wraps past the start line is a zone starting near the end
         // of the lap; keep its start and let the end stay unknown.
         const end = d > start ? d : null;
-        if (end != null && end - start > 1500) return;
+        if (end != null && (end - start < ZONE_MIN_M || end - start > ZONE_MAX_M)) return;
         changed = this.absorb({ start, end }) || changed;
       }
     });
     if (changed) this.zoneList = [...this.zoneList].sort((a, b) => a.start - b.start).map(z => ({ ...z }));
   }
 
+  // Same zone: starts close together, or the span opens inside a known zone.
   private absorb(span: DrsZone): boolean {
-    const zone = this.zoneList.find(z => Math.abs(z.start - span.start) < ZONE_MERGE_M);
+    const zone = this.zoneList.find(z =>
+      Math.abs(z.start - span.start) < ZONE_MERGE_M || (z.end != null && z.start <= span.start && span.start <= z.end));
     if (!zone) { this.zoneList.push({ ...span }); return true; }
     let changed = false;
     if (span.start < zone.start) { zone.start = span.start; changed = true; }

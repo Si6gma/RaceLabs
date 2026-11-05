@@ -16,6 +16,8 @@ import { apiFetch } from '@/utils/api';
 import { deltaTrace, segmentTimes, detectCorners, cornerMetrics, lapStats } from '@/utils/lapAnalysis';
 
 const PURPLE = '#B388FF';
+// The time-trial rival's colour in lists and cards: apart from the lap palette and from orange.
+const RIVAL_BLUE = '#4D8BFF';
 
 // Sessions on the same circuit closer together than this belong to one race week.
 const WEEK_GAP_MS = 8 * 60 * 60 * 1000;
@@ -81,6 +83,15 @@ function lapTime(ms?: number): string {
 
 function sectorTime(ms?: number): string {
   return ms && ms > 0 ? formatTime(ms).replace(/^0:/, '') : '--.---';
+}
+
+// Time-trial ghosts carry no name, only a slot and a lap time. The slot with the
+// fastest lap is the rival; any other slot is one of your own laps replaying.
+function ghostNames(laps: LoadedLap[]): Map<string, 'Rival' | 'Ghost'> {
+  const ghosts = laps.filter(l => l.meta.ghost);
+  const fastest = [...ghosts].sort((a, b) => (a.meta.lap_time_ms ?? 0) - (b.meta.lap_time_ms ?? 0))[0];
+  const rivalSlot = fastest?.meta.ghost?.car_index;
+  return new Map(ghosts.map(l => [l.meta.id, l.meta.ghost?.car_index === rivalSlot ? 'Rival' : 'Ghost']));
 }
 
 export default function Recorded() {
@@ -202,14 +213,18 @@ export default function Recorded() {
           return { meta, samples: raw.ok ? normalizeImportedSamples((await raw.json()).samples) : [] };
         }));
         if (cancelled) return;
-        const ordered = [...loaded].sort((a, b) => a.meta.lap_number - b.meta.lap_number);
+        // Your laps in order, then the ghosts
+        const ordered = [...loaded].sort((a, b) => Number(!!a.meta.ghost) - Number(!!b.meta.ghost) || a.meta.lap_number - b.meta.lap_number);
         setSession(data);
         setLaps(ordered);
-        // Start on the fastest clean lap so the page opens with something to read
+        // Start on the fastest clean lap so the page opens with something to read,
+        // laid over the rival's lap when the session has one.
+        const byTime = (a: LoadedLap, b: LoadedLap) => (a.meta.lap_time_ms ?? 0) - (b.meta.lap_time_ms ?? 0);
         const fastest = ordered
-          .filter(l => l.meta.valid && !l.meta.partial && (l.meta.lap_time_ms ?? 0) > 0)
-          .sort((a, b) => (a.meta.lap_time_ms ?? 0) - (b.meta.lap_time_ms ?? 0))[0] ?? ordered[0];
-        setSelected(fastest ? [fastest.meta.id] : []);
+          .filter(l => !l.meta.ghost && l.meta.valid && !l.meta.partial && (l.meta.lap_time_ms ?? 0) > 0)
+          .sort(byTime)[0] ?? ordered.find(l => !l.meta.ghost) ?? ordered[0];
+        const rival = ordered.filter(l => l.meta.ghost && (l.meta.lap_time_ms ?? 0) > 0).sort(byTime)[0];
+        setSelected([fastest, rival].filter((l): l is LoadedLap => !!l).map(l => l.meta.id));
         setConfirmDelete(false);
       } catch (err) {
         console.error('Failed to load session:', err);
@@ -227,6 +242,9 @@ export default function Recorded() {
     [selected, laps],
   );
   const colourOf = (id: string) => LAP_COLORS[selected.indexOf(id)] ?? '#9AACBE';
+  const ghostName = useMemo(() => ghostNames(laps), [laps]);
+  const lapName = (meta: ImportedLap) => (meta.ghost ? ghostName.get(meta.id) ?? 'Ghost' : `Lap ${meta.lap_number}`);
+  const lapShort = (meta: ImportedLap) => (meta.ghost ? (ghostName.get(meta.id) === 'Rival' ? 'RIV' : 'GHO') : `L${meta.lap_number}`);
 
   const toggleLap = (id: string) => {
     setSelected(prev => {
@@ -414,7 +432,7 @@ export default function Recorded() {
         field: field ?? undefined, grid,
       },
       laps
-        .filter(l => (l.meta.lap_time_ms ?? 0) > 0 && l.samples.length > 1)
+        .filter(l => !l.meta.ghost && (l.meta.lap_time_ms ?? 0) > 0 && l.samples.length > 1)
         .map(l => ({
           number: l.meta.lap_number,
           timeMs: l.meta.lap_time_ms ?? 0,
@@ -642,7 +660,8 @@ export default function Recorded() {
               {laps.map(({ meta }) => {
                 const on = selected.includes(meta.id);
                 const colour = on ? colourOf(meta.id) : undefined;
-                const isBest = session.best_lap_time_ms != null && meta.lap_time_ms === session.best_lap_time_ms;
+                const isBest = !meta.ghost && session.best_lap_time_ms != null && meta.lap_time_ms === session.best_lap_time_ms;
+                const rival = !!meta.ghost && ghostName.get(meta.id) === 'Rival';
                 const editing = lapRenaming?.id === meta.id;
                 return (
                   <div
@@ -656,7 +675,9 @@ export default function Recorded() {
                     }`}
                     style={{ borderLeftColor: colour ?? 'transparent' }}
                   >
-                    <span className="font-telemetry text-[13px] tabular-nums text-motorsport-muted w-6 shrink-0">{meta.lap_number}</span>
+                    <span className="font-telemetry text-[13px] tabular-nums w-6 shrink-0" style={{ color: rival ? RIVAL_BLUE : '#9AACBE' }}>
+                      {meta.ghost ? (rival ? 'R' : 'G') : meta.lap_number}
+                    </span>
                     <span className="flex flex-col gap-1 min-w-0">
                       <span
                         className={`font-telemetry text-[16px] font-semibold tabular-nums leading-none ${meta.valid ? '' : 'line-through'}`}
@@ -686,6 +707,7 @@ export default function Recorded() {
                     ) : (
                       <span className="ml-auto flex items-center gap-1.5 text-[12px] text-motorsport-muted shrink-0 min-w-0">
                         {meta.nickname && <span className="font-semibold text-motorsport-text truncate max-w-[110px]">{meta.nickname}</span>}
+                        {meta.ghost && <span className="font-semibold" style={{ color: rival ? RIVAL_BLUE : '#9AACBE' }}>{lapName(meta)}</span>}
                         {!meta.valid && <span className="text-motorsport-red font-semibold">invalid</span>}
                         {meta.partial && <span>partial</span>}
                         {meta.pit_lap && <span>pit</span>}
@@ -729,7 +751,7 @@ export default function Recorded() {
               containerRef={graphRef}
               distance={tooltipSample.cumulative_distance ?? 0}
               visibleChannels={visibleChannels}
-              rows={selectedLaps.map(lap => ({ lap: lap.meta.lap_number, color: colourOf(lap.meta.id), sample: sampleAt(lap, effectivePosition) }))}
+              rows={selectedLaps.map(lap => ({ lap: lapShort(lap.meta), color: colourOf(lap.meta.id), sample: sampleAt(lap, effectivePosition) }))}
             />
           )}
         </div>
@@ -762,7 +784,7 @@ export default function Recorded() {
                 <div className="flex items-baseline justify-between">
                   <span className="flex items-baseline gap-2">
                     <span className="w-2.5 h-2.5 inline-block translate-y-px" style={{ backgroundColor: colourOf(meta.id) }} />
-                    <span className="text-[14px] font-bold tracking-wide text-motorsport-text">Lap {meta.lap_number}</span>
+                    <span className="text-[14px] font-bold tracking-wide" style={{ color: meta.ghost && ghostName.get(meta.id) === 'Rival' ? RIVAL_BLUE : '#E8EEF4' }}>{lapName(meta)}</span>
                     {i === 0 && <span className="text-[12px] text-motorsport-muted font-semibold">reference</span>}
                   </span>
                   <span className="flex items-baseline gap-3">
@@ -798,7 +820,7 @@ export default function Recorded() {
                   <tr>
                     <th className="text-left font-telemetry text-[11px] font-semibold text-motorsport-muted pb-1 w-6">#</th>
                     {selectedLaps.map(l => (
-                      <th key={l.meta.id} className="text-right font-telemetry text-[11px] font-semibold pb-1" style={{ color: colourOf(l.meta.id) }}>L{l.meta.lap_number}</th>
+                      <th key={l.meta.id} className="text-right font-telemetry text-[11px] font-semibold pb-1" style={{ color: colourOf(l.meta.id) }}>{lapShort(l.meta)}</th>
                     ))}
                   </tr>
                 </thead>
@@ -889,7 +911,7 @@ export default function Recorded() {
                   <tr>
                     <th className="text-left font-telemetry text-[11px] font-semibold text-motorsport-muted pb-1">at</th>
                     {selectedLaps.map(l => (
-                      <th key={l.meta.id} className="text-right font-telemetry text-[11px] font-semibold pb-1" style={{ color: colourOf(l.meta.id) }}>L{l.meta.lap_number}</th>
+                      <th key={l.meta.id} className="text-right font-telemetry text-[11px] font-semibold pb-1" style={{ color: colourOf(l.meta.id) }}>{lapShort(l.meta)}</th>
                     ))}
                   </tr>
                 </thead>
@@ -964,7 +986,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 // ── Hover readout for the trace ───────────────────────────────────────────────
 
-interface TooltipRow { lap: number; color: string; sample: TelemetryPoint | null }
+interface TooltipRow { lap: string; color: string; sample: TelemetryPoint | null }
 
 function GraphTooltip({
   x, y, containerRef, distance, visibleChannels, rows,
@@ -997,7 +1019,7 @@ function GraphTooltip({
               const value = raw == null ? null : ch.transform ? ch.transform(raw) : raw;
               return (
                 <div key={r.lap} className="flex items-baseline justify-between gap-2">
-                  <span className="text-[12px] font-semibold" style={{ color: r.color }}>L{r.lap}</span>
+                  <span className="text-[12px] font-semibold" style={{ color: r.color }}>{r.lap}</span>
                   <span className="font-telemetry text-[13px] tabular-nums text-motorsport-text">
                     {value == null ? '--' : `${value.toFixed(ch.decimals)}${ch.unit}`}
                   </span>

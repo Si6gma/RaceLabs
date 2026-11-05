@@ -194,6 +194,8 @@ export interface ImportedLap {
   partial?: boolean;
   pit_lap?: boolean;
   nickname?: string | null;
+  /** A time-trial ghost's lap (the rival, or your own best replaying); null for your own laps. */
+  ghost?: { car_index: number; lap_time_ms: number } | null;
   extra_data?: Record<string, any>;
   valid_bin_count: number;
   total_bin_count: number;

@@ -12,14 +12,20 @@ Alongside the player's laps it keeps, per LAP_DATA packet, where the whole field
 is (SessionField, at most 10 Hz, saved with the player lap it was driven during)
 and every car's completed laps (GridLap, flushed with each player lap save and
 when recording or the session ends).
+
+In time trial the other slots are ghosts replaying one lap each (your best, the
+rival). The pipeline hands their samples over too, and every distinct ghost lap
+(slot and lap time) is saved once as a lap of the session marked `ghost`, so the
+rival's telemetry can be laid over the player's. Partial ghost laps are never
+saved: the ghost loops, the full lap comes round again.
 """
 import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy import insert, select
 
@@ -42,6 +48,7 @@ FLASHBACK_REWIND_M = 20.0
 # Field positions are kept at most this often (session_time seconds).
 FIELD_FRAME_INTERVAL_S = 0.1
 GRID_SIZE = 22
+TIME_TRIAL_TYPE_ID = 13
 # The session extra_data keys describing who is in the session.
 ROSTER_KEYS = ("participants", "car_team_ids", "player_car_index")
 PARTICIPANT_KEYS = ("index", "name", "team_id", "race_number")
@@ -77,6 +84,8 @@ class FinalizedLap:
     session_time_start: float = 0.0
     field_frames: List[Dict[str, Any]] = field(default_factory=list)
     grid_laps: List[GridLapResult] = field(default_factory=list)
+    # {"car_index", "lap_time_ms"} when this is a time-trial ghost's lap, not the player's.
+    ghost: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -125,12 +134,13 @@ def complete_grid_lap(car_index: int, finished: _CarLap, lap_time_ms: int) -> Op
     )
 
 
-def field_frame(lap_all: List[Dict[str, Any]], session_time: float) -> Dict[str, Any]:
-    """One snapshot of the field; cars not in the session are zeroed, missing slots too."""
+def field_frame(lap_all: List[Dict[str, Any]], session_time: float, keep: Optional[Set[int]] = None) -> Dict[str, Any]:
+    """One snapshot of the field; cars not in the session are zeroed, missing slots too.
+    Slots in `keep` (moving ghosts, which the game marks inactive) are kept regardless."""
     cars = []
     for index in range(GRID_SIZE):
         lap = lap_all[index] if index < len(lap_all) else None
-        if lap is None or lap.get("result_status") in _SKIPPED_RESULT_STATUS:
+        if lap is None or (lap.get("result_status") in _SKIPPED_RESULT_STATUS and index not in (keep or ())):
             cars.append([0, 0, 0])
         else:
             cars.append([float(lap.get("lap_distance") or 0), int(lap.get("car_position") or 0),
@@ -196,6 +206,13 @@ def finalize_lap(
     )
 
 
+def ghost_sample(sample: Dict[str, Any], lap: _LapInProgress) -> Dict[str, Any]:
+    """The ghost's sample with its own lap clock: the game mirrors the player's
+    current_lap_time_ms onto ghosts, so time is counted from the lap's first sample."""
+    start = float(lap.samples[0].get("session_time") or 0) if lap.samples else float(sample.get("session_time") or 0)
+    return {**sample, "current_lap_time_ms": int(round((float(sample.get("session_time") or 0) - start) * 1000))}
+
+
 def _sample_dicts(lap: FinalizedLap) -> List[Dict[str, Any]]:
     """The same keys the CSV import service hands to resample_lap."""
     track_length = float(lap.meta.get("track_length") or 0)
@@ -253,6 +270,9 @@ class LiveRecorder:
         self._grid: Dict[int, _CarLap] = {}
         self._pending_grid: List[GridLapResult] = []
         self._grid_laps = 0
+        self._ghosts: Dict[int, _LapInProgress] = {}
+        self._ghost_saved: Set[Tuple[int, int]] = set()
+        self._ghost_laps = 0
 
     # ----- control -----
 
@@ -276,6 +296,7 @@ class LiveRecorder:
             "discarded": self._discarded,
             "flashbacks": self._flashbacks,
             "grid_laps": self._grid_laps,
+            "ghost_laps": self._ghost_laps,
             "last_discard_reason": self._last_discard_reason,
         }
 
@@ -293,6 +314,7 @@ class LiveRecorder:
             self._discard(f"session event {code}")
         self._flush_grid()
         self._reset_grid()
+        self._reset_ghosts()
         self._session_uid = None
 
     def on_sample(self, sample: Dict[str, Any], meta: Dict[str, Any]):
@@ -308,9 +330,11 @@ class LiveRecorder:
                 self._discard("session_uid changed")
             self._flush_grid()
             self._reset_grid()
+            self._reset_ghosts()
             self._recorded_laps = 0
             self._flashbacks = 0
             self._grid_laps = 0
+            self._ghost_laps = 0
         self._session_uid = uid
         self._last_meta = dict(meta)
 
@@ -351,9 +375,46 @@ class LiveRecorder:
             return
         self._last_field_t = session_time
         if self._current is not None:
-            self._current.field_frames.append(field_frame(lap_all, session_time))
+            self._current.field_frames.append(field_frame(lap_all, session_time, self._moving_ghosts()))
+
+    def on_ghost_sample(self, index: int, sample: Dict[str, Any], meta: Dict[str, Any]):
+        """A time-trial ghost slot's LAP_DATA-rate sample, in the player sample's shape.
+        A ghost that stops moving is left alone; a lap completes when its counter moves on."""
+        if not self._recording or meta.get("session_type_id") != TIME_TRIAL_TYPE_ID:
+            return
+        lap_num = int(sample.get("lap_num") or 0)
+        if lap_num <= 0:
+            return
+        distance = float(sample.get("lap_distance") or 0)
+        current = self._ghosts.get(index)
+        if current is None or lap_num != current.lap_number:
+            if current is not None and lap_num == current.lap_number + 1:
+                self._finish_ghost(index, current, int(sample.get("last_lap_time_ms") or 0), float(sample.get("session_time") or 0))
+            current = _LapInProgress(lap_num, dict(meta))
+            self._ghosts[index] = current
+        elif current.samples and distance == float(current.samples[-1].get("lap_distance") or 0):
+            return
+        if current.samples and is_flashback(current.samples[-1], sample):
+            current.samples = rewind_samples(current.samples, distance)
+        current.samples.append(ghost_sample(sample, current))
 
     # ----- internals -----
+
+    def _moving_ghosts(self) -> Set[int]:
+        return {index for index, ghost in self._ghosts.items() if len(ghost.samples) > 1}
+
+    def _reset_ghosts(self):
+        self._ghosts = {}
+        self._ghost_saved = set()
+
+    def _finish_ghost(self, index: int, lap: _LapInProgress, lap_time_ms: int, next_session_time: float):
+        if lap_time_ms <= 0 or (index, lap_time_ms) in self._ghost_saved:
+            return
+        result = finalize_lap(lap, lap_time_ms, time.time() - next_session_time)
+        if isinstance(result, str) or result.partial_start:
+            return
+        self._ghost_saved.add((index, lap_time_ms))
+        self._schedule(self._persist_safely(replace(result, ghost={"car_index": index, "lap_time_ms": lap_time_ms})))
 
     def _track_grid(self, lap_all: List[Dict[str, Any]]):
         for index, lap in enumerate(lap_all):
@@ -425,7 +486,10 @@ class LiveRecorder:
     async def _persist_safely(self, lap: FinalizedLap):
         try:
             await self._persist(lap)
-            self._recorded_laps += 1
+            if lap.ghost:
+                self._ghost_laps += 1
+            else:
+                self._recorded_laps += 1
             self._grid_laps += len(lap.grid_laps)
         except Exception:
             logger.exception(f"Live recorder failed to save lap {lap.lap_number}")
@@ -490,6 +554,7 @@ class LiveRecorder:
                         "flashbacks": lap.flashbacks,
                         "session_time_start": lap.session_time_start,
                         "source": "live",
+                        **({"ghost": lap.ghost} if lap.ghost else {}),
                     },
                     resampled_data=resample_lap(sample_dicts),
                 )
@@ -537,9 +602,11 @@ class LiveRecorder:
                 for start in range(0, len(rows), SAMPLE_FLUSH_THRESHOLD):
                     await db.execute(insert(TelemetrySample), rows[start:start + SAMPLE_FLUSH_THRESHOLD])
 
-                session_row.lap_count = (session_row.lap_count or 0) + 1
+                # Ghost laps are not the player's: they count for nothing on the session.
+                if not lap.ghost:
+                    session_row.lap_count = (session_row.lap_count or 0) + 1
                 session_row.sample_count = (session_row.sample_count or 0) + len(sample_dicts)
-                if lap.valid and not lap.partial_start:
+                if lap.valid and not lap.partial_start and not lap.ghost:
                     best = session_row.best_lap_time_ms
                     if best is None or lap.lap_time_ms < best:
                         session_row.best_lap_time_ms = lap.lap_time_ms

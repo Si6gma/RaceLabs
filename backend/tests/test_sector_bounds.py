@@ -231,3 +231,19 @@ class PipelineDrsTest(unittest.TestCase):
         pipe._multicar["lap_all"] = [{"lap_distance": 1900.0}]
         pipe._learn_drs()
         self.assertEqual(pipe.get_session_summary()["drs_zones"], [{"start": 1210.0, "end": 1900.0}])
+
+
+from app.sector_bounds import drs_span  # noqa: E402
+
+
+class DrsZoneRulesTest(unittest.TestCase):
+    def test_span_shorter_than_minimum_is_dropped(self):
+        self.assertIsNone(drs_span(1852.8, 1864.2))
+
+    def test_span_starting_inside_a_zone_extends_it(self):
+        merged = merge_drs_zones([{"start": 1309.0, "end": 1863.0}], [{"start": 1800.0, "end": 1900.0}])
+        self.assertEqual(merged, [{"start": 1309.0, "end": 1900.0}])
+
+    def test_span_starting_inside_a_zone_with_unknown_end_merges(self):
+        merged = merge_drs_zones([{"start": 4203.0, "end": 4945.0}], [{"start": 4838.0, "end": None}])
+        self.assertEqual(merged, [{"start": 4203.0, "end": 4945.0}])

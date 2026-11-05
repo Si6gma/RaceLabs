@@ -75,3 +75,44 @@ class SessionResetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GhostFeedTest(unittest.TestCase):
+    """In time trial the pipeline hands every non-player slot to the recorder as a ghost."""
+
+    class Recorder:
+        def __init__(self):
+            self.ghosts = []
+
+        def on_ghost_sample(self, index, sample, meta):
+            self.ghosts.append((index, sample, meta))
+
+        def on_lap_all(self, lap_all, session_time):
+            pass
+
+    def feed(self, session_type: int):
+        pipe = TelemetryPipeline()
+        pipe.recorder = self.Recorder()
+        pipe._recording = True
+        pipe._start_session()
+        pipe._track_session_uid(111)
+        pipe._update_session({**SPA_RACE, "session_type": session_type})
+        pipe._multicar["telemetry_all"] = [{"speed": 100 + i, "engine_rpm": 9000} for i in range(3)]
+        pipe._multicar["motion_all"] = [{"world_pos_x": float(i)} for i in range(3)]
+        lap_all = [
+            {**lap(5), "lap_distance": 1200.0},
+            {**lap(2), "lap_distance": 0.0, "result_status": 0},
+            {**lap(2), "lap_distance": 3400.0, "result_status": 0},
+        ]
+        pipe._feed_ghosts(lap_all, 12.5)
+        return pipe.recorder.ghosts
+
+    def test_time_trial_feeds_moving_slots_with_their_own_telemetry(self):
+        ghosts = self.feed(13)
+        self.assertEqual([g[0] for g in ghosts], [2])
+        index, sample, meta = ghosts[0]
+        self.assertEqual((sample["speed"], sample["world_pos_x"], sample["lap_distance"], sample["session_time"]), (102, 2.0, 3400.0, 12.5))
+        self.assertEqual(meta["session_type_id"], 13)
+
+    def test_other_sessions_feed_nothing(self):
+        self.assertEqual(self.feed(10), [])

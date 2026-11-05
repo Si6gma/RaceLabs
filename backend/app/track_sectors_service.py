@@ -13,7 +13,7 @@ from app.sector_bounds import Zone, merge_drs_zones
 
 Bounds = Tuple[Optional[float], Optional[float]]
 # Bumped when the DRS learner changes in a way that makes stored zones untrustworthy.
-DRS_ZONES_VERSION = 2
+DRS_ZONES_VERSION = 3
 
 
 def merge_bounds(stored: Bounds, new: Bounds) -> Bounds:

@@ -71,6 +71,7 @@ function TimingTower() {
     : { ahead: null, behind: null };
   if (lapAll) sectors.current.tracker.update(lapAll);
   const sectorTimes = sectors.current.tracker.latestFor(viewedIdx);
+  const lastLap = sectors.current.tracker.lastLapFor(viewedIdx);
   const nameOf = (idx: number) => participants.find(p => p.index === idx)?.name ?? `Car ${idx + 1}`;
   const teamOf = (idx: number) => participants.find(p => p.index === idx)?.team_id;
 
@@ -175,10 +176,17 @@ function TimingTower() {
           </div>
         </div>
 
-        {/* Session best: purple is the F1 colour for it, so no label needed */}
-        <div className="px-3 py-3 flex-1 min-h-[56px] flex items-center justify-center">
-          <span className="font-telemetry text-[28px] font-bold tabular-nums leading-none text-motorsport-purple">
-            {bestMs ? formatTime(bestMs) : '--:--.---'}
+        {/* The lap just completed, coloured like a sector: purple session
+            best, green personal best, yellow otherwise. Session best beneath. */}
+        <div className="px-3 py-3 flex-1 min-h-[56px] flex flex-col items-center justify-center gap-1.5">
+          <span
+            className="font-telemetry text-[28px] font-bold tabular-nums leading-none"
+            style={{ color: lastLap ? SECTOR_COLOURS[lastLap.colour] : '#5F7183' }}
+          >
+            {lastLap ? formatTime(lastLap.ms) : '--:--.---'}
+          </span>
+          <span className="font-telemetry text-[12px] tabular-nums leading-none text-motorsport-muted">
+            {bestMs ? `best ${formatTime(bestMs)}` : ''}
           </span>
         </div>
       </div>

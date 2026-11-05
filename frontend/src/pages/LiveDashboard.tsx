@@ -8,7 +8,7 @@ import ERSSuite from '@/components/ERSSuite';
 import TelemetryTimeline from '@/components/TelemetryTimeline';
 import ReplayBar from '@/components/ReplayBar';
 import { useSettings } from '@/stores/settingsStore';
-import { SectorBoundaryLearner } from '@/utils/sectorLines';
+import { SectorBoundaryLearner, DrsZoneLearner, type DrsZone } from '@/utils/sectorLines';
 import { useRef } from 'react';
 
 function LiveDashboard() {
@@ -26,10 +26,44 @@ function LiveDashboard() {
   // Highlight the car being watched on the map (defaults to the player's own car)
   const viewedCarIndex = selectedCarIndex ?? currentFrame?.player_car_index;
 
-  // Sector lines are learned from the whole grid as cars cross them
+  // Sector lines: seeded from what the backend has stored for the track, then
+  // refined live as cars cross them.
   const sectorLearner = useRef(new SectorBoundaryLearner());
-  sectorLearner.current.update(currentFrame?.lap_all, currentFrame?.session?.track_id);
+  const drsLearner = useRef(new DrsZoneLearner());
+  const stored = useRef<Record<string, { sectors?: [number | null, number | null]; drs_zones?: DrsZone[] }>>({});
+  const session = useTelemetryStore(s => s.session);
+  const trackId = currentFrame?.session?.track_id;
+
+  const seedFromStore = (id: number | undefined) => {
+    if (id == null) return;
+    const known = stored.current[String(id)];
+    if (!known) return;
+    if (known.sectors) sectorLearner.current.seed(id, known.sectors[0], known.sectors[1]);
+    if (known.drs_zones) drsLearner.current.seed(id, known.drs_zones);
+  };
+
+  useEffect(() => {
+    fetch('/api/tracks/sectors').then(r => r.json()).then(d => {
+      stored.current = d.sectors ?? {};
+      seedFromStore(trackId);
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (trackId == null) return;
+    seedFromStore(trackId);
+    if (session?.track_id === trackId) {
+      if (session.sector_bounds) sectorLearner.current.seed(trackId, session.sector_bounds[0], session.sector_bounds[1]);
+      if (session.drs_zones) drsLearner.current.seed(trackId, session.drs_zones);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackId, session]);
+
+  sectorLearner.current.update(currentFrame?.lap_all, trackId);
   const sectorDistances = sectorLearner.current.distances();
+  drsLearner.current.update(currentFrame?.lap_all, currentFrame?.status_all, currentFrame?.telemetry_all, trackId);
+  const drsZones = drsLearner.current.zones();
 
   useEffect(() => {
     if (replayMode) return;
@@ -81,6 +115,7 @@ function LiveDashboard() {
             lapNumber={l?.current_lap_num}
             sessionType={currentFrame?.session?.session_type}
             sectorDistances={sectorDistances}
+            drsZones={drsZones}
           />
         </div>
 

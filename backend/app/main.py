@@ -21,6 +21,7 @@ from app.udp_receiver import receiver
 from app.ha_lights import HALights
 from app.csv_import_service import CSVImportService
 from app.track_alias_service import TrackAliasService
+from app.track_sectors_service import TrackSectorsService
 from sqlalchemy.ext.asyncio import AsyncSession
 
 settings = get_settings()
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 lights: Optional[HALights] = None  # set in lifespan when Home Assistant is configured
 recorder = LiveRecorder(async_session)
 pipeline.set_recorder(recorder)
+pipeline.set_session_factory(async_session)
 
 
 async def udp_handler(data: bytes):
@@ -44,7 +46,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     logger.info("Starting Telemetry Suite...")
     await init_db()
-    
+    async with async_session() as db:
+        for track_id, stored in (await TrackSectorsService(db).get_all()).items():
+            pipeline.sector_learner.seed(track_id, *stored["sectors"])
+            pipeline.drs_learner.seed(track_id, stored["drs_zones"])
+
     udp_task = asyncio.create_task(receiver.start(udp_handler))
 
     global lights
@@ -399,6 +405,17 @@ async def get_track_aliases(db: AsyncSession = Depends(get_db)):
 async def set_track_alias(track_id: str, body: TrackAliasUpdate, db: AsyncSession = Depends(get_db)):
     """Set a track nickname; an empty string removes it. Returns the full map."""
     return {"aliases": await TrackAliasService(db).set_alias(track_id, body.nickname.strip())}
+
+
+@app.get("/api/tracks/sectors")
+async def get_track_sectors(db: AsyncSession = Depends(get_db)):
+    """Learned track geometry per track_id: {"sectors": [s1_m, s2_m], "drs_zones": [{start, end}]},
+    null where unknown."""
+    stored = await TrackSectorsService(db).get_all()
+    return {"sectors": {
+        str(track_id): {"sectors": list(row["sectors"]), "drs_zones": row["drs_zones"]}
+        for track_id, row in stored.items()
+    }}
 
 
 # ============================================================================

@@ -35,6 +35,12 @@ async def init_db():
             ADD COLUMN IF NOT EXISTS nickname VARCHAR
         """))
 
+        # Migration: add drs_zones column to track_sectors if missing
+        await conn.execute(text("""
+            ALTER TABLE track_sectors
+            ADD COLUMN IF NOT EXISTS drs_zones JSONB
+        """))
+
         # Convert telemetry_samples to a TimescaleDB hypertable partitioned by time.
         # create_hypertable is idempotent when if_not_exists => TRUE.
         await conn.execute(text("""

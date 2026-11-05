@@ -11,6 +11,8 @@ from typing import Dict, List, Any, Optional, Deque
 from dataclasses import dataclass, field
 
 from app.decoder import F1Decoder, DriverStatus, PitStatus, ResultStatus
+from app.sector_bounds import DrsZoneLearner, SectorBoundaryLearner
+from app.track_sectors_service import TrackSectorsService
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,10 @@ _MULTICAR_KEYS = frozenset({
 })
 # Player-car sub-dicts merged into the latest-state snapshot handed to the recorder.
 _PLAYER_KEYS = ("lap", "telemetry", "motion", "status", "session")
+# Per-car arrays the DRS learner needs together; they arrive in separate packets.
+_DRS_KEYS = ("lap_all", "status_all", "telemetry_all")
+# Learned sector lines are written at most this often per track.
+_SECTOR_SAVE_INTERVAL = 1.0
 
 
 @dataclass
@@ -55,12 +61,18 @@ class SessionState:
 
 
 class TelemetryPipeline:
-    def __init__(self, max_buffer_size: int = 1000, recorder=None):
+    def __init__(self, max_buffer_size: int = 1000, recorder=None, session_factory=None):
         self.decoder = F1Decoder()
         self.frame_buffer: Deque[Dict[str, Any]] = deque(maxlen=max_buffer_size)
         self.current_frame: Optional[Dict[str, Any]] = None
         self.session_state: Optional[SessionState] = None
         self.recorder = recorder
+        self.sector_learner = SectorBoundaryLearner()
+        self.drs_learner = DrsZoneLearner()
+        self._multicar: Dict[str, List[Dict[str, Any]]] = {}
+        self._session_factory = session_factory
+        self._sector_tasks: Dict[int, asyncio.Task] = {}
+        self._sector_saved_at: Dict[int, float] = {}
         self._player: Dict[str, Any] = {}
         self._listeners: List[Any] = []
         self._lock = asyncio.Lock()
@@ -68,6 +80,9 @@ class TelemetryPipeline:
 
     def set_recorder(self, recorder):
         self.recorder = recorder
+
+    def set_session_factory(self, session_factory):
+        self._session_factory = session_factory
 
     def add_listener(self, callback):
         self._listeners.append(callback)
@@ -113,6 +128,14 @@ class TelemetryPipeline:
 
             if "lap" in frame_dict:
                 self._update_lap(frame_dict["lap"])
+
+            if "lap_all" in frame_dict:
+                self._learn_sectors(frame_dict["lap_all"])
+
+            for key in _DRS_KEYS:
+                if key in frame_dict:
+                    self._multicar[key] = frame_dict[key]
+                    self._learn_drs()
 
             event_code = (frame_dict.get("event") or {}).get("code")
             if event_code and self._recording and self.recorder:
@@ -209,6 +232,45 @@ class TelemetryPipeline:
         if self._recording and self.recorder:
             self.recorder.on_sample(self._player_sample(lap_info), self._recorder_meta())
 
+    def _learn_sectors(self, lap_all: List[Dict[str, Any]]):
+        track_id = self.session_state.track_id
+        if track_id < 0:
+            return
+        if self.sector_learner.update(lap_all, track_id):
+            self._schedule_sector_save(track_id)
+
+    def _learn_drs(self):
+        track_id = self.session_state.track_id
+        if track_id < 0 or any(key not in self._multicar for key in _DRS_KEYS):
+            return
+        if self.drs_learner.update(*(self._multicar[key] for key in _DRS_KEYS), track_id):
+            self._schedule_sector_save(track_id)
+
+    def _schedule_sector_save(self, track_id: int):
+        """Persist both learners' state for a track in the background, at most once a second.
+        A pending task picks up any further lowering before it runs."""
+        if self._session_factory is None or track_id in self._sector_tasks:
+            return
+        wait = max(0.0, self._sector_saved_at.get(track_id, 0.0) + _SECTOR_SAVE_INTERVAL - time.monotonic())
+        task = asyncio.create_task(self._save_sectors(track_id, wait))
+        self._sector_tasks[track_id] = task
+
+    async def _save_sectors(self, track_id: int, wait: float):
+        try:
+            if wait > 0:
+                await asyncio.sleep(wait)
+            s1, s2 = self.sector_learner.bounds(track_id)
+            zones = self.drs_learner.zones(track_id)
+            async with self._session_factory() as db:
+                stored = await TrackSectorsService(db).merge(track_id, s1, s2, zones)
+            self.sector_learner.seed(track_id, *stored["sectors"])
+            self.drs_learner.seed(track_id, stored["drs_zones"])
+        except Exception:
+            logger.exception(f"Failed to save sector bounds for track {track_id}")
+        finally:
+            self._sector_saved_at[track_id] = time.monotonic()
+            self._sector_tasks.pop(track_id, None)
+
     def _player_sample(self, lap: Dict[str, Any]) -> Dict[str, Any]:
         tel = self._player.get("telemetry") or {}
         motion = self._player.get("motion") or {}
@@ -288,6 +350,8 @@ class TelemetryPipeline:
             "in_pits": session.in_pits,
             "num_pit_stops": session.num_pit_stops,
             "car_position": session.car_position,
+            "sector_bounds": list(self.sector_learner.bounds(session.track_id)),
+            "drs_zones": self.drs_learner.zones(session.track_id),
             "is_active": session.is_active,
             "created_at": session.created_at,
             "updated_at": session.updated_at,

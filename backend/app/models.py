@@ -166,3 +166,15 @@ class TrackAlias(Base):
 
     track_id = Column(String, primary_key=True)
     nickname = Column(String, nullable=False)
+
+
+class TrackSectors(Base):
+    """Learned sector line positions (metres of lap_distance) for a game track_id."""
+    __tablename__ = "track_sectors"
+
+    track_id = Column(Integer, primary_key=True)
+    sector1_m = Column(Float)
+    sector2_m = Column(Float)
+    # Learned DRS zones as a list of {"start": m, "end": m | null}.
+    drs_zones = Column(JSON)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

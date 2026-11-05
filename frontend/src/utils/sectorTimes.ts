@@ -30,6 +30,8 @@ export class SectorTracker {
   private carBest = new Map<number, Array<number | null>>();
   private latest = new Map<number, Array<SectorTime | null>>();
   private bestLap = new Map<number, number>();
+  private sessionBestLap: number | null = null;
+  private lastLap = new Map<number, { ms: number; colour: SectorColour }>();
   // Every completed lap's time per car, by lap number, so two cars can be
   // compared on the same lap once both have finished it.
   private lapTimes = new Map<number, Map<number, number>>();
@@ -72,12 +74,28 @@ export class SectorTracker {
         if (best == null || ms < best) this.sessionBest[done] = ms;
         if (mine == null || ms < mine) bests[done] = ms;
         this.carBest.set(idx, bests);
-        // A clean lap just finished: keep the car's fastest for the session.
+        // A clean lap just finished: colour it like a sector, purple for the
+        // session's fastest, green for the car's own best, yellow otherwise.
         if (done === 2) {
           const lapMs = car.last_lap_time_ms;
-          const bestLap = this.bestLap.get(idx);
-          if (lapMs > 0 && (bestLap == null || lapMs < bestLap)) this.bestLap.set(idx, lapMs);
+          if (lapMs > 0) {
+            const mine = this.bestLap.get(idx);
+            const lapColour: SectorColour =
+              this.sessionBestLap == null || lapMs < this.sessionBestLap ? 'purple'
+              : mine == null || lapMs < mine ? 'green' : 'yellow';
+            if (this.sessionBestLap == null || lapMs < this.sessionBestLap) this.sessionBestLap = lapMs;
+            if (mine == null || lapMs < mine) this.bestLap.set(idx, lapMs);
+            this.lastLap.set(idx, { ms: lapMs, colour: lapColour });
+          }
         }
+      } else if (done === 2 && car.last_lap_time_ms > 0) {
+        this.lastLap.set(idx, { ms: car.last_lap_time_ms, colour: 'none' });
+      }
+      // The sector row starts the new lap empty; the finished lap's time
+      // carries the story from here.
+      if (done === 2) {
+        this.latest.set(idx, [null, null, null]);
+        return;
       }
       const latest = this.latest.get(idx) ?? [null, null, null];
       latest[done] = { ms, colour };
@@ -91,6 +109,10 @@ export class SectorTracker {
 
   bestLapFor(carIdx: number): number | null {
     return this.bestLap.get(carIdx) ?? null;
+  }
+
+  lastLapFor(carIdx: number): { ms: number; colour: SectorColour } | null {
+    return this.lastLap.get(carIdx) ?? null;
   }
 
   // The other car's time minus ours on our most recent completed lap, or null

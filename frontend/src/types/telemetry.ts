@@ -145,6 +145,9 @@ export interface SessionSummary {
   lap_count: number;
   recorded_laps: number;
   is_active: boolean;
+  /** Sector 1 and 2 end in metres for the current track, as far as the backend knows. */
+  sector_bounds?: [number | null, number | null];
+  drs_zones?: Array<{ start: number; end: number | null }>;
 }
 
 export interface LapSummary {

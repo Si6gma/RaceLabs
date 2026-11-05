@@ -13,6 +13,17 @@ interface TrackOutline {
 const outlines = trackOutlines as unknown as Record<string, TrackOutline>;
 
 import { teamColor } from '@/utils/teams';
+import type { DrsZone } from '@/utils/sectorLines';
+
+// Centerline points between two lap fractions, for stroking a stretch of track.
+function centerlineSpan(centerline: Pt[], arcLengths: number[], t0: number, t1: number): Pt[] {
+  const pts: Pt[] = [interpCenterline(centerline, arcLengths, t0)];
+  for (let i = 0; i < centerline.length; i++) {
+    if (arcLengths[i] > t0 && arcLengths[i] < t1) pts.push(centerline[i]);
+  }
+  pts.push(interpCenterline(centerline, arcLengths, t1));
+  return pts;
+}
 
 interface Props {
   trackId?: number;
@@ -26,6 +37,8 @@ interface Props {
   sessionType?: number;
   /** Sector 1 and sector 2 end, metres from the start line, once learned. */
   sectorDistances?: [number | null, number | null];
+  /** DRS zones as activation point and end, metres from the start line. */
+  drsZones?: DrsZone[];
 }
 
 // Nearest point on a polyline to p: used to stretch a sector line edge to edge.
@@ -131,6 +144,7 @@ function TrackMap({
   lapNumber,
   sessionType,
   sectorDistances,
+  drsZones,
 }: Props) {
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const needsDraw  = useRef(true);
@@ -144,8 +158,8 @@ function TrackMap({
   const lastSessRef     = useRef<number | undefined>(undefined);
   const traceBounds     = useRef({ minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
 
-  const propsRef = useRef({ trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType, sectorDistances });
-  propsRef.current = { trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType, sectorDistances };
+  const propsRef = useRef({ trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType, sectorDistances, drsZones });
+  propsRef.current = { trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType, sectorDistances, drsZones };
 
   // ── rAF draw loop ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -177,7 +191,7 @@ function TrackMap({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      const { trackId: tid, trackLength: tlen, playerCarIndex: pci, allLapDistances: dists, carTeamIds: teams, posX: px, posZ: pz, sectorDistances: sectors } = propsRef.current;
+      const { trackId: tid, trackLength: tlen, playerCarIndex: pci, allLapDistances: dists, carTeamIds: teams, posX: px, posZ: pz, sectorDistances: sectors, drsZones: zones } = propsRef.current;
       const outline = tid !== undefined ? outlines[String(tid)] : undefined;
 
       if (outline) {
@@ -212,6 +226,39 @@ function TrackMap({
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
         ctx.stroke();
+
+        // DRS zones: a green band along the centerline from the activation
+        // point to where cars close it, with a tick at the activation point.
+        if (zones && tlen && tlen > 0) {
+          for (const zone of zones) {
+            const t0 = zone.start / tlen;
+            const t1 = (zone.end ?? Math.min(tlen, zone.start + 120)) / tlen;
+            const span = centerlineSpan(geo.centerline, geo.arcLengths, t0, t1);
+            ctx.beginPath();
+            ctx.moveTo(span[0][0], span[0][1]);
+            for (let i = 1; i < span.length; i++) ctx.lineTo(span[i][0], span[i][1]);
+            ctx.strokeStyle = zone.end == null ? 'rgba(0,232,90,0.35)' : 'rgba(0,232,90,0.6)';
+            ctx.lineWidth = 6;
+            ctx.lineCap = 'butt';
+            ctx.stroke();
+            const c = span[0];
+            const a = nearest(geo.edgeLeft, c);
+            const b = nearest(geo.edgeRight, c);
+            ctx.beginPath();
+            ctx.moveTo(a[0], a[1]);
+            ctx.lineTo(b[0], b[1]);
+            ctx.strokeStyle = '#00E85A';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            const nx = a[0] - b[0], ny = a[1] - b[1];
+            const len = Math.hypot(nx, ny) || 1;
+            ctx.fillStyle = '#00E85A';
+            ctx.font = '700 11px "Barlow Condensed", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('DRS', a[0] + (nx / len) * 14, a[1] + (ny / len) * 14);
+          }
+        }
 
         // Sector lines, edge to edge, once the boundaries have been learned
         if (sectors && tlen && tlen > 0) {

@@ -51,6 +51,10 @@ async def lifespan(app: FastAPI):
             pipeline.sector_learner.seed(track_id, *stored["sectors"])
             pipeline.drs_learner.seed(track_id, stored["drs_zones"])
 
+    if _load_recording_state():
+        pipeline.start_recording()
+        logger.info("Recording was on before the restart; resumed")
+
     udp_task = asyncio.create_task(receiver.start(udp_handler))
 
     global lights
@@ -212,15 +216,34 @@ async def get_recording_status():
     return _recording_status()
 
 
+def _save_recording_state(recording: bool) -> None:
+    """Recording is a server-side switch; remember it across restarts."""
+    try:
+        with open(settings.RECORDING_STATE_FILE, "w") as f:
+            json.dump({"recording": recording}, f)
+    except OSError as e:
+        logger.warning(f"Could not save recording state to {settings.RECORDING_STATE_FILE}: {e}")
+
+
+def _load_recording_state() -> bool:
+    try:
+        with open(settings.RECORDING_STATE_FILE) as f:
+            return bool(json.load(f).get("recording"))
+    except (OSError, ValueError):
+        return False
+
+
 @app.post("/api/recording/start")
 async def start_recording():
     pipeline.start_recording()
+    _save_recording_state(True)
     return _recording_status()
 
 
 @app.post("/api/recording/stop")
 async def stop_recording():
     pipeline.stop_recording()
+    _save_recording_state(False)
     return _recording_status()
 
 

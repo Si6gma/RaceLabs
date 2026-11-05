@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     HA_LIGHT_RIGHT: str = "light.right"
     # Where the dashboard's on/off and brightness for the lamps are kept.
     LIGHTS_STATE_FILE: str = "lights_state.json"
+    # Whether recording was on, so a restart or redeploy does not switch it off.
+    RECORDING_STATE_FILE: str = "recording_state.json"
     # When set, every POST/PUT/PATCH/DELETE under /api/ must carry it as X-Control-Key.
     CONTROL_KEY: str = ""
 

@@ -6,11 +6,15 @@ import TyreAnalytics from '@/components/TyreAnalytics';
 import TimingTower from '@/components/TimingTower';
 import ERSSuite from '@/components/ERSSuite';
 import TelemetryTimeline from '@/components/TelemetryTimeline';
+import ReplayBar from '@/components/ReplayBar';
+import { useSettings } from '@/stores/settingsStore';
 
 function LiveDashboard() {
   const currentFrame = useTelemetryStore(s => s.currentFrame);
   const setSession   = useTelemetryStore(s => s.setSession);
   const selectedCarIndex = useTelemetryStore(s => s.selectedCarIndex);
+  const replayMode = useTelemetryStore(s => s.replayMode);
+  const traceHeight = useSettings(s => s.traceHeight);
 
   const t = currentFrame?.telemetry;
   const m = currentFrame?.motion;
@@ -21,6 +25,7 @@ function LiveDashboard() {
   const viewedCarIndex = selectedCarIndex ?? currentFrame?.player_car_index;
 
   useEffect(() => {
+    if (replayMode) return;
     const poll = async () => {
       try {
         const res = await fetch('/api/session');
@@ -33,7 +38,7 @@ function LiveDashboard() {
     poll();
     const id = setInterval(poll, 5000);
     return () => clearInterval(id);
-  }, [setSession]);
+  }, [setSession, replayMode]);
 
   return (
     <div className="h-full flex flex-col gap-px p-px overflow-hidden bg-motorsport-border">
@@ -78,8 +83,11 @@ function LiveDashboard() {
         </div>
       </div>
 
+      {/* ── Replay transport, only while a recording is playing ── */}
+      {replayMode && <ReplayBar />}
+
       {/* ── Telemetry Trace ── */}
-      <div className="h-[320px] shrink-0">
+      <div className="shrink-0" style={{ height: traceHeight }}>
         <TelemetryTimeline />
       </div>
     </div>

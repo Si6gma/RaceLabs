@@ -3,6 +3,7 @@ import { ChevronDown, Lock } from 'lucide-react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { TEAM_NAMES } from '@/utils/teams';
 import DriverTag from '@/components/DriverTag';
+import { useSettings } from '@/stores/settingsStore';
 
 // Picks which car the dashboard follows. Lives at the top of the timing tower
 // so the name sits directly above the numbers it belongs to.
@@ -13,6 +14,7 @@ function CarSelector() {
   const setSelectedCarIndex = useTelemetryStore(s => s.setSelectedCarIndex);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const hideAi = useSettings(s => s.hideAiDrivers);
 
   // If the watched car leaves the session, fall back to the player's own car.
   useEffect(() => {
@@ -90,7 +92,7 @@ function CarSelector() {
             detail={playerCarIndex !== undefined ? `slot ${playerCarIndex + 1}` : ''}
             onPick={() => choose(null)}
           />
-          {participants.map(p => (
+          {participants.filter(p => !hideAi || !p.ai_controlled || p.index === selectedCarIndex).map(p => (
             <Option
               key={p.index}
               selected={selectedCarIndex === p.index}

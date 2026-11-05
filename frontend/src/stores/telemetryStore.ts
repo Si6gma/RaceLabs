@@ -53,8 +53,6 @@ interface TelemetryState {
   recording:  boolean;
 
   importModalOpen: boolean;
-  // Track id (as a string) → the nickname the user gave it in Config.
-  trackAliases: Record<string, string>;
 
   // Actions
   setCurrentFrame:           (frame: TelemetryFrame) => void;
@@ -69,7 +67,6 @@ interface TelemetryState {
   addImportedSession:        (session: ImportedSession) => void;
   removeImportedSession:     (id: string) => void;
   setImportModalOpen:        (open: boolean) => void;
-  setTrackAliases:           (aliases: Record<string, string>) => void;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -86,7 +83,6 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   replayMode:              false,
   recording:               false,
   importModalOpen:         false,
-  trackAliases:            {},
 
   setCurrentFrame: (frame) => {
     const { currentFrame: prev, selectedCarIndex, participants } = get();
@@ -152,5 +148,4 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   addImportedSession:         (session)  => set({ importedSessions: [session, ...get().importedSessions] }),
   removeImportedSession:      (id)       => set({ importedSessions: get().importedSessions.filter(s => s.id !== id) }),
   setImportModalOpen:         (open)     => set({ importModalOpen: open }),
-  setTrackAliases:            (aliases)  => set({ trackAliases: aliases }),
 }));

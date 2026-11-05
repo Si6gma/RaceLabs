@@ -12,6 +12,12 @@ from app.csv_normalizer import normalize_telemetry_data
 from app.resampler import resample_lap
 from app.models import ImportedSession, ImportedLap, TelemetrySample
 
+
+def normalize_nickname(raw: str) -> Optional[str]:
+    """Strip surrounding whitespace; an empty result means no nickname (None)."""
+    stripped = raw.strip()
+    return stripped or None
+
 logger = logging.getLogger(__name__)
 
 
@@ -314,8 +320,18 @@ class CSVImportService:
             "max_speed": lap.max_speed,
             "avg_speed": lap.avg_speed,
             "min_speed": lap.min_speed,
+            "nickname": lap.nickname,
             "extra_data": extra,
         }
+
+    async def set_lap_nickname(self, lap_id: str, nickname: str) -> Optional[Dict[str, Any]]:
+        """Set a lap's nickname; an empty string clears it. Returns the lap dict, or None if unknown."""
+        lap = await self.db.get(ImportedLap, uuid.UUID(lap_id))
+        if not lap:
+            return None
+        lap.nickname = normalize_nickname(nickname)
+        await self.db.commit()
+        return self._lap_to_dict(lap)
     
     async def get_lap_telemetry(self, lap_id: str) -> List[Dict[str, Any]]:
         """Get all telemetry samples for a lap."""

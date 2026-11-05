@@ -85,7 +85,8 @@ function TimingTower() {
   const bestMs    = sectors.current.tracker.bestLapFor(viewedIdx) ?? session?.best_lap_time ?? (lastLapMs > 0 ? lastLapMs : null);
   const invalid   = l?.current_lap_invalid ?? false;
   const pitStatus = l?.pit_status ?? 0;
-  const deltaMs   = bestMs && currentMs > 0 ? currentMs - bestMs : null;
+  // Outside a race: how the last completed lap compared to the best.
+  const deltaMs   = bestMs && lastLapMs > 0 ? lastLapMs - bestMs : null;
 
   return (
     <div className="telemetry-panel flex flex-col h-full overflow-hidden">
@@ -142,7 +143,7 @@ function TimingTower() {
         </div>
         ) : (
         <div className="px-3 py-3 bg-motorsport-dark shrink-0 h-[180px] flex flex-col justify-center gap-2">
-          <span className="eng-label">Delta to best</span>
+          <span className="eng-label">Last lap vs best</span>
           <span
             className="font-telemetry font-bold tabular-nums leading-none"
             style={{

@@ -27,7 +27,25 @@ export const CHANNELS: ChannelDef[] = [
 
 export const DEFAULT_VISIBLE = new Set(['speed_kmh', 'throttle', 'brake']);
 
+// Recorded.tsx mirrors left/right in its GRAPH_PAD for the cursor maths.
 const PAD = { top: 20, right: 60, bottom: 40, left: 50 };
+const BAND_GAP = 4;
+const GRID_COLS = 8;
+const X_TICKS = 6;
+const CURSOR_DOT_RADIUS = 3;
+const REF_LINE_WIDTH = 2;
+const LINE_WIDTH = 1.5;
+const DELTA_MIN_RANGE = 0.5;
+
+const LABEL_FONT = '600 12px "Barlow Condensed", sans-serif';
+const AXIS_FONT  = '12px "JetBrains Mono", monospace';
+const BG          = '#0D1117';
+const GRID        = '#1E2834';
+const GRID_STRONG = '#2A3745';
+const AXIS_TEXT   = '#9AACBE';
+const CURSOR      = 'rgba(232, 238, 244, 0.6)';
+const DELTA_LOSS  = 'rgba(255, 32, 68, 0.22)';
+const DELTA_GAIN  = 'rgba(0, 232, 90, 0.22)';
 
 interface LapData {
   data: TelemetryPoint[];
@@ -44,244 +62,391 @@ interface Props {
   timeWindow?: number; // seconds, for time-based graphs
 }
 
-function TelemetryGraphCanvas({
-  laps,
-  visibleChannels,
-  zoomRange,
-  effectivePosition,
-  cursorLocked,
-  xField = 'normalized_track_position',
-  timeWindow,
-}: Props) {
+// ── Layout ───────────────────────────────────────────────────────────────────
+
+interface BandChannel {
+  def: ChannelDef;
+  min: number;
+  max: number;
+}
+
+interface Band {
+  top: number;
+  height: number;
+  channels: BandChannel[];
+}
+
+interface Layout {
+  width: number;
+  height: number;
+  graphWidth: number;
+  graphHeight: number;
+  bands: Band[];
+}
+
+const isPedal = (ch: ChannelDef) => ch.key === 'throttle' || ch.key === 'brake';
+
+function deltaRange(laps: LapData[]): number {
+  const peak = laps.reduce((acc, lap) =>
+    lap.data.reduce((m, s) => {
+      const d = Math.abs(s.delta_time ?? 0);
+      return Number.isFinite(d) && d > m ? d : m;
+    }, acc), 0);
+  return Math.max(DELTA_MIN_RANGE, Math.ceil(peak));
+}
+
+function channelRange(def: ChannelDef, laps: LapData[]): BandChannel {
+  if (def.key !== 'delta_time') return { def, min: def.min, max: def.max };
+  const r = deltaRange(laps);
+  return { def, min: -r, max: r };
+}
+
+// Visible channels in CHANNELS order, one band each; throttle and brake share.
+function groupChannels(visibleChannels: Set<string>): ChannelDef[][] {
+  return CHANNELS
+    .filter(ch => visibleChannels.has(ch.key as string))
+    .reduce<ChannelDef[][]>((groups, ch) => {
+      const sharedIdx = isPedal(ch) ? groups.findIndex(g => g.some(isPedal)) : -1;
+      if (sharedIdx === -1) return [...groups, [ch]];
+      return groups.map((g, i) => (i === sharedIdx ? [...g, ch] : g));
+    }, []);
+}
+
+function buildLayout(width: number, height: number, visibleChannels: Set<string>, laps: LapData[]): Layout {
+  const graphWidth = width - PAD.left - PAD.right;
+  const graphHeight = height - PAD.top - PAD.bottom;
+  const groups = groupChannels(visibleChannels);
+  const n = groups.length;
+  const bandHeight = n > 0 ? (graphHeight - BAND_GAP * (n - 1)) / n : 0;
+  const bands = groups.map((group, i) => ({
+    top: PAD.top + i * (bandHeight + BAND_GAP),
+    height: bandHeight,
+    channels: group.map(def => channelRange(def, laps)),
+  }));
+  return { width, height, graphWidth, graphHeight, bands };
+}
+
+const toY = (band: Band, ch: BandChannel, val: number) =>
+  band.top + band.height * (1 - (val - ch.min) / (ch.max - ch.min));
+
+// ── X mapping ────────────────────────────────────────────────────────────────
+
+interface XMapper {
+  isTimeBased: boolean;
+  timeMin: number;
+  timeMax: number;
+  timeSpan: number;
+  norm: (s: TelemetryPoint) => number;
+}
+
+function buildXMapper(laps: LapData[], xField: Props['xField'], timeWindow?: number): XMapper {
+  const isTimeBased = xField === 'timestamp';
+  const ref = laps[0];
+  if (!isTimeBased || !ref || ref.data.length === 0) {
+    return { isTimeBased, timeMin: 0, timeMax: 1, timeSpan: 1, norm: s => s.normalized_track_position };
+  }
+  const timeMax = ref.data[ref.data.length - 1].timestamp ?? 0;
+  // Anchor the domain to a fixed window so the graph scrolls smoothly
+  const timeSpan = Math.max(1e-9, timeWindow ?? (timeMax - (ref.data[0].timestamp ?? 0)));
+  const timeMin = timeMax - timeSpan;
+  return { isTimeBased, timeMin, timeMax, timeSpan, norm: s => ((s.timestamp ?? timeMin) - timeMin) / timeSpan };
+}
+
+// Index range covering [zStart, zEnd] with one sample of slack either side.
+function visibleRange(samples: TelemetryPoint[], norm: XMapper['norm'], zStart: number, zEnd: number): [number, number] {
+  const last = samples.length - 1;
+  const first = samples.findIndex(s => norm(s) >= zStart);
+  const startI = first === -1 ? 0 : Math.max(0, first - 1);
+  let endI = last;
+  for (let i = last; i >= 0; i--) {
+    if (norm(samples[i]) <= zEnd) { endI = Math.min(last, i + 1); break; }
+  }
+  return [startI, endI];
+}
+
+// Nearest sample to a normalised x position (samples are monotonic in x).
+function sampleNear(samples: TelemetryPoint[], norm: XMapper['norm'], pos: number): TelemetryPoint | null {
+  if (samples.length === 0) return null;
+  let lo = 0;
+  let hi = samples.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (norm(samples[mid]) < pos) lo = mid + 1; else hi = mid;
+  }
+  const prev = samples[lo - 1];
+  if (prev && Math.abs(norm(prev) - pos) < Math.abs(norm(samples[lo]) - pos)) return prev;
+  return samples[lo];
+}
+
+// ── Canvas helpers ───────────────────────────────────────────────────────────
+
+function prepareCanvas(canvas: HTMLCanvasElement): { ctx: CanvasRenderingContext2D; width: number; height: number } | null {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  // Reallocating the bitmap is the expensive part; only do it when the box or dpr changed.
+  const targetW = Math.round(rect.width * dpr);
+  const targetH = Math.round(rect.height * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, width: rect.width, height: rect.height };
+}
+
+const crisp = (v: number) => Math.round(v) + 0.5;
+
+const fmtTick = (ch: ChannelDef, v: number) => {
+  const t = ch.transform ? ch.transform(v) : v;
+  return Number.isInteger(t) ? String(t) : t.toFixed(1);
+};
+
+const fmtDistance = (dist: number) => (dist >= 1000 ? `${(dist / 1000).toFixed(2)} km` : `${Math.round(dist)} m`);
+
+// ── Data layer ───────────────────────────────────────────────────────────────
+
+function drawGrid(ctx: CanvasRenderingContext2D, layout: Layout) {
+  const { graphWidth, graphHeight, bands } = layout;
+  ctx.strokeStyle = GRID;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= GRID_COLS; i++) {
+    const x = crisp(PAD.left + (i / GRID_COLS) * graphWidth);
+    ctx.beginPath();
+    ctx.moveTo(x, PAD.top);
+    ctx.lineTo(x, PAD.top + graphHeight);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = GRID_STRONG;
+  bands.slice(1).forEach(band => {
+    const y = crisp(band.top - BAND_GAP / 2);
+    ctx.beginPath();
+    ctx.moveTo(PAD.left, y);
+    ctx.lineTo(PAD.left + graphWidth, y);
+    ctx.stroke();
+  });
+}
+
+function drawBandLabels(ctx: CanvasRenderingContext2D, layout: Layout) {
+  const { graphWidth, bands } = layout;
+  for (const band of bands) {
+    // Channel names on the right, one line per channel in the band
+    ctx.font = LABEL_FONT;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    band.channels.forEach((ch, row) => {
+      ctx.fillStyle = ch.def.color;
+      ctx.fillText(ch.def.label, PAD.left + graphWidth + 8, band.top + 14 + row * 16);
+    });
+    // Max at the top and min at the bottom on the left; a shared band has one scale
+    const axis = band.channels[0];
+    ctx.font = AXIS_FONT;
+    ctx.fillStyle = AXIS_TEXT;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText(fmtTick(axis.def, axis.max), PAD.left - 8, band.top);
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(fmtTick(axis.def, axis.min), PAD.left - 8, band.top + band.height);
+  }
+}
+
+function tracePath(ctx: CanvasRenderingContext2D, pts: [number, number][]) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+}
+
+function fillDelta(ctx: CanvasRenderingContext2D, band: Band, pts: [number, number][], zeroY: number) {
+  const first = pts[0][0];
+  const last = pts[pts.length - 1][0];
+  const fillSide = (clipTop: number, clipBottom: number, color: string) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(PAD.left, clipTop, last - first + 2, clipBottom - clipTop);
+    ctx.clip();
+    tracePath(ctx, pts);
+    ctx.lineTo(last, zeroY);
+    ctx.lineTo(first, zeroY);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
+  };
+  fillSide(band.top, zeroY, DELTA_LOSS);                 // above zero: losing time
+  fillSide(zeroY, band.top + band.height, DELTA_GAIN);   // below zero: gaining
+}
+
+function drawBand(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  band: Band,
+  laps: LapData[],
+  xm: XMapper,
+  zoomRange: [number, number],
+) {
+  const [zStart, zEnd] = zoomRange;
+  const xScale = layout.graphWidth / Math.max(1e-9, zEnd - zStart);
+  const toX = (s: TelemetryPoint) => PAD.left + (xm.norm(s) - zStart) * xScale;
+  const shared = band.channels.length > 1;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(PAD.left, band.top, layout.graphWidth, band.height);
+  ctx.clip();
+  ctx.lineJoin = 'round';
+
+  for (const ch of band.channels) {
+    const isDelta = ch.def.key === 'delta_time';
+    const zeroY = isDelta ? crisp(toY(band, ch, 0)) : 0;
+    if (isDelta) {
+      ctx.strokeStyle = GRID_STRONG;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(PAD.left, zeroY);
+      ctx.lineTo(PAD.left + layout.graphWidth, zeroY);
+      ctx.stroke();
+    }
+
+    laps.forEach((lap, lapIdx) => {
+      const samples = lap.data;
+      if (samples.length < 2) return;
+      const [startI, endI] = visibleRange(samples, xm.norm, zStart, zEnd);
+      const pts: [number, number][] = [];
+      for (let i = startI; i <= endI; i++) {
+        const s = samples[i];
+        pts.push([toX(s), toY(band, ch, s[ch.def.key] as number)]);
+      }
+      if (pts.length < 2) return;
+
+      if (isDelta) fillDelta(ctx, band, pts, zeroY);
+
+      // Every lap keeps its own colour in every band; the reference lap is heavier.
+      // In the shared pedal band the brake trace is dashed so the two can be told apart.
+      ctx.strokeStyle = lap.color;
+      ctx.lineWidth = lapIdx === 0 ? REF_LINE_WIDTH : LINE_WIDTH;
+      ctx.setLineDash(shared && ch.def.key === 'brake' ? [4, 3] : []);
+      tracePath(ctx, pts);
+      ctx.stroke();
+    });
+  }
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawXAxis(ctx: CanvasRenderingContext2D, layout: Layout, laps: LapData[], xm: XMapper, zoomRange: [number, number]) {
+  const ref = laps[0];
+  if (!ref || ref.data.length === 0) return;
+  const [zStart, zEnd] = zoomRange;
+  const posSpan = Math.max(1e-9, zEnd - zStart);
+  ctx.fillStyle = AXIS_TEXT;
+  ctx.font = AXIS_FONT;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  for (let t = 0; t <= X_TICKS; t++) {
+    const targetPos = zStart + (t / X_TICKS) * posSpan;
+    const x = PAD.left + (t / X_TICKS) * layout.graphWidth;
+    const label = xm.isTimeBased
+      ? `${(xm.timeMin + targetPos * xm.timeSpan - xm.timeMax).toFixed(0)}s`
+      : fmtDistance(ref.data[Math.max(0, Math.min(ref.data.length - 1, Math.round(targetPos * (ref.data.length - 1))))]?.cumulative_distance ?? 0);
+    ctx.fillText(label, x, PAD.top + layout.graphHeight + 16);
+  }
+}
+
+function drawData(canvas: HTMLCanvasElement, props: Props) {
+  const prepared = prepareCanvas(canvas);
+  if (!prepared) return;
+  const { ctx, width, height } = prepared;
+  const { laps, visibleChannels, zoomRange, xField, timeWindow } = props;
+
+  const layout = buildLayout(width, height, visibleChannels, laps);
+  const xm = buildXMapper(laps, xField, timeWindow);
+
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, width, height);
+
+  drawGrid(ctx, layout);
+  drawBandLabels(ctx, layout);
+  for (const band of layout.bands) drawBand(ctx, layout, band, laps, xm, zoomRange);
+  drawXAxis(ctx, layout, laps, xm, zoomRange);
+}
+
+// ── Cursor layer ─────────────────────────────────────────────────────────────
+
+function drawCursor(canvas: HTMLCanvasElement, props: Props) {
+  const prepared = prepareCanvas(canvas);
+  if (!prepared) return;
+  const { ctx, width, height } = prepared;
+  const { laps, visibleChannels, zoomRange, effectivePosition, cursorLocked, xField, timeWindow } = props;
+
+  ctx.clearRect(0, 0, width, height);
+
+  const [zStart, zEnd] = zoomRange;
+  if (effectivePosition < zStart || effectivePosition > zEnd) return;
+
+  const layout = buildLayout(width, height, visibleChannels, laps);
+  const xm = buildXMapper(laps, xField, timeWindow);
+  const x = PAD.left + ((effectivePosition - zStart) / Math.max(1e-9, zEnd - zStart)) * layout.graphWidth;
+
+  ctx.strokeStyle = CURSOR;
+  ctx.lineWidth = 1;
+  ctx.setLineDash(cursorLocked ? [] : [4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x, PAD.top);
+  ctx.lineTo(x, height - PAD.bottom);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // A dot on each lap's trace in every band
+  for (const band of layout.bands) {
+    for (const ch of band.channels) {
+      for (const lap of laps) {
+        const s = sampleNear(lap.data, xm.norm, effectivePosition);
+        if (!s) continue;
+        const y = toY(band, ch, s[ch.def.key] as number);
+        if (y < band.top || y > band.top + band.height) continue;
+        ctx.fillStyle = lap.color;
+        ctx.beginPath();
+        ctx.arc(x, y, CURSOR_DOT_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
+
+function TelemetryGraphCanvas(props: Props) {
+  const { laps, visibleChannels, zoomRange, effectivePosition, cursorLocked, xField = 'normalized_track_position', timeWindow } = props;
   const dataCanvasRef = useRef<HTMLCanvasElement>(null);
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawRef = useRef<() => void>(() => {});
+  const cursorDrawRef = useRef<() => void>(() => {});
 
-  // Data layer — traces, grid, labels
   useEffect(() => {
     const canvas = dataCanvasRef.current;
     if (!canvas || laps.length === 0) return;
-
-    function draw() {
-      const ctx = canvas!.getContext('2d');
-      if (!ctx) return;
-
-      const dpr = window.devicePixelRatio || 1;
-      const rect = canvas!.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
-      canvas!.width = rect.width * dpr;
-      canvas!.height = rect.height * dpr;
-      ctx.scale(dpr, dpr);
-
-      const width = rect.width;
-      const height = rect.height;
-      const graphWidth = width - PAD.left - PAD.right;
-      const graphHeight = height - PAD.top - PAD.bottom;
-
-      ctx.clearRect(0, 0, width, height);
-
-      const [zStart, zEnd] = zoomRange;
-      const posSpan = Math.max(1e-9, zEnd - zStart);
-
-      // Grid lines
-      ctx.strokeStyle = '#1A2840';
-      ctx.lineWidth = 0.5;
-      for (let i = 0; i <= 5; i++) {
-        const y = PAD.top + (graphHeight / 5) * i;
-        ctx.beginPath();
-        ctx.moveTo(PAD.left, y);
-        ctx.lineTo(width - PAD.right, y);
-        ctx.stroke();
-      }
-
-      // Resolve X domain helper
-      const isTimeBased = xField === 'timestamp';
-      const refLap = laps[0];
-      let timeMin = 0;
-      let timeMax = 1;
-      let timeSpan = 1;
-      if (isTimeBased && refLap && refLap.data.length > 0) {
-        timeMax = refLap.data[refLap.data.length - 1].timestamp ?? 0;
-        // Anchor domain to a fixed window so the graph scrolls smoothly
-        timeSpan = Math.max(1e-9, timeWindow ?? (timeMax - (refLap.data[0].timestamp ?? 0)));
-        timeMin = timeMax - timeSpan;
-      }
-      const getXNorm = (s: TelemetryPoint): number => {
-        if (isTimeBased) {
-          return ((s.timestamp ?? timeMin) - timeMin) / timeSpan;
-        }
-        return s.normalized_track_position;
-      };
-
-      // Channel traces
-      CHANNELS.forEach(ch => {
-        if (!visibleChannels.has(ch.key as string)) return;
-        laps.forEach(lap => {
-          const samples = lap.data;
-          if (samples.length < 2) return;
-
-          // Find visible sample range
-          let startI = 0;
-          let endI = samples.length - 1;
-          for (let i = 0; i < samples.length; i++) {
-            if (getXNorm(samples[i]) >= zStart) {
-              startI = Math.max(0, i - 1);
-              break;
-            }
-          }
-          for (let i = samples.length - 1; i >= 0; i--) {
-            if (getXNorm(samples[i]) <= zEnd) {
-              endI = Math.min(samples.length - 1, i + 1);
-              break;
-            }
-          }
-
-          const xScale = graphWidth / posSpan;
-
-          ctx.strokeStyle = ch.color;
-          ctx.lineWidth = ch.key === 'speed_kmh' || ch.key === 'rpm' ? 1.5 : 1;
-          ctx.globalAlpha =
-            ch.key === 'throttle' || ch.key === 'brake' ? 0.35
-            : ch.key === 'delta_time' ? 0.6
-            : 0.9;
-
-          const pts: [number, number][] = [];
-          for (let i = startI; i <= endI; i++) {
-            const s = samples[i];
-            const val = s[ch.key] as number;
-            const x = PAD.left + (getXNorm(s) - zStart) * xScale;
-            const normalized = (val - ch.min) / (ch.max - ch.min);
-            const y = PAD.top + graphHeight * ch.offset + graphHeight * ch.scale * (1 - normalized);
-            pts.push([x, y]);
-          }
-
-          ctx.beginPath();
-          if (pts.length >= 2) {
-            ctx.moveTo(pts[0][0], pts[0][1]);
-            for (let i = 0; i < pts.length - 1; i++) {
-              const p0 = pts[Math.max(0, i - 1)];
-              const p1 = pts[i];
-              const p2 = pts[i + 1];
-              const p3 = pts[Math.min(pts.length - 1, i + 2)];
-              const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
-              const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
-              const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
-              const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
-              ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
-            }
-          }
-          ctx.stroke();
-          ctx.globalAlpha = 1;
-        });
-      });
-
-      // X-axis labels
-      if (refLap && refLap.data.length > 0) {
-        ctx.fillStyle = '#475569';
-        ctx.font = '9px monospace';
-        ctx.textAlign = 'center';
-        const numTicks = 6;
-        for (let t = 0; t <= numTicks; t++) {
-          const targetPos = zStart + (t / numTicks) * posSpan;
-          const x = PAD.left + (t / numTicks) * graphWidth;
-          let label = '';
-          if (isTimeBased) {
-            const targetTime = timeMin + targetPos * timeSpan;
-            const rel = targetTime - timeMax;
-            label = `${rel.toFixed(0)}s`;
-          } else {
-            const idx = Math.max(0, Math.min(
-              refLap.data.length - 1,
-              Math.round(targetPos * (refLap.data.length - 1))
-            ));
-            const dist = refLap.data[idx]?.cumulative_distance ?? 0;
-            label = dist >= 1000 ? `${(dist / 1000).toFixed(2)}km` : `${Math.round(dist)}m`;
-          }
-          ctx.fillText(label, x, PAD.top + graphHeight + 16);
-        }
-      }
-
-      // Y-axis labels (Speed scale)
-      ctx.fillStyle = '#64748b';
-      ctx.font = '10px monospace';
-      ctx.textAlign = 'right';
-      ctx.fillText('350', PAD.left - 5, PAD.top + 5);
-      ctx.fillText('175', PAD.left - 5, PAD.top + graphHeight / 2 + 5);
-      ctx.fillText('0', PAD.left - 5, PAD.top + graphHeight - 5);
-
-      // Right-side channel legend
-      ctx.textAlign = 'left';
-      let labelY = PAD.top + 10;
-      CHANNELS.forEach(ch => {
-        if (!visibleChannels.has(ch.key as string)) return;
-        ctx.fillStyle = ch.color;
-        ctx.font = '9px monospace';
-        ctx.fillText(ch.label, width - PAD.right + 6, labelY);
-        labelY += 12;
-      });
-    }
-
-    drawRef.current = draw;
-    draw();
+    drawRef.current = () => drawData(canvas, { laps, visibleChannels, zoomRange, effectivePosition, cursorLocked, xField, timeWindow });
+    drawRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [laps, visibleChannels, zoomRange, xField, timeWindow]);
 
-  // Persistent ResizeObserver — only created once, calls latest drawRef
-  useEffect(() => {
-    const canvas = dataCanvasRef.current;
-    if (!canvas) return;
-    const observer = new ResizeObserver(() => drawRef.current());
-    observer.observe(canvas);
-    return () => observer.disconnect();
-  }, []);
-
-  // Cursor overlay — vertical line at effectivePosition
-  const cursorDrawRef = useRef<() => void>(() => {});
   useEffect(() => {
     const canvas = cursorCanvasRef.current;
     if (!canvas) return;
+    cursorDrawRef.current = () => drawCursor(canvas, { laps, visibleChannels, zoomRange, effectivePosition, cursorLocked, xField, timeWindow });
+    cursorDrawRef.current();
+  }, [laps, visibleChannels, zoomRange, effectivePosition, cursorLocked, xField, timeWindow]);
 
-    function draw() {
-      const ctx = canvas!.getContext('2d');
-      if (!ctx) return;
-
-      const dpr = window.devicePixelRatio || 1;
-      const rect = canvas!.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
-      canvas!.width = rect.width * dpr;
-      canvas!.height = rect.height * dpr;
-      ctx.scale(dpr, dpr);
-
-      const width = rect.width;
-      const height = rect.height;
-      const graphWidth = width - PAD.left - PAD.right;
-
-      ctx.clearRect(0, 0, width, height);
-
-      const [zStart, zEnd] = zoomRange;
-      const posSpan = Math.max(1e-9, zEnd - zStart);
-
-      if (effectivePosition >= zStart && effectivePosition <= zEnd) {
-        const x = PAD.left + (effectivePosition - zStart) / posSpan * graphWidth;
-        ctx.strokeStyle = cursorLocked ? '#fff' : 'rgba(255,255,255,0.5)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash(cursorLocked ? [4, 4] : [2, 6]);
-        ctx.beginPath();
-        ctx.moveTo(x, PAD.top);
-        ctx.lineTo(x, height - PAD.bottom);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-
-    cursorDrawRef.current = draw;
-    draw();
-  }, [effectivePosition, cursorLocked, zoomRange]);
-
+  // Persistent observers, created once; they call whatever draw is current
   useEffect(() => {
-    const canvas = cursorCanvasRef.current;
-    if (!canvas) return;
-    const observer = new ResizeObserver(() => cursorDrawRef.current());
-    observer.observe(canvas);
+    const data = dataCanvasRef.current;
+    const cursor = cursorCanvasRef.current;
+    if (!data || !cursor) return;
+    const observer = new ResizeObserver(() => { drawRef.current(); cursorDrawRef.current(); });
+    observer.observe(data);
     return () => observer.disconnect();
   }, []);
 

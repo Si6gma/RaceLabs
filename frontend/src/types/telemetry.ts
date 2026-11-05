@@ -189,6 +189,7 @@ export interface ImportedLap {
   valid: boolean;
   partial?: boolean;
   pit_lap?: boolean;
+  nickname?: string | null;
   valid_bin_count: number;
   total_bin_count: number;
   max_speed: number;

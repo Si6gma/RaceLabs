@@ -24,7 +24,8 @@ export function useWebSocket() {
       const frame = pendingFrameRef.current;
       if (frame) {
         pendingFrameRef.current = null;
-        setCurrentFrame(frame as TelemetryFrame);
+        // While a recording plays back, the replay owns the store.
+        if (!useTelemetryStore.getState().replayMode) setCurrentFrame(frame as TelemetryFrame);
       }
     }, FLUSH_INTERVAL_MS);
   }, [setCurrentFrame]);

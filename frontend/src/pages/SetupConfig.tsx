@@ -1,75 +1,38 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useTelemetryStore } from '@/stores/telemetryStore';
+import { useEffect, useState } from 'react';
 import { apiFetch, getControlKey, setControlKey } from '@/utils/api';
-import trackOutlines from '@/data/track_outlines.json';
-
-const TRACKS = Object.entries(trackOutlines as Record<string, { name: string }>)
-  .map(([id, t]) => ({ id, name: t.name }))
-  .sort((a, b) => a.name.localeCompare(b.name));
+import { useSettings } from '@/stores/settingsStore';
 
 // Settings that live on this browser or on the server. Nothing here is decoration:
-// the control key decides who may press buttons, nicknames rename circuits everywhere.
+// the control key decides who may press buttons, the rest changes how numbers read.
 export default function SetupConfig() {
-  const trackAliases = useTelemetryStore(s => s.trackAliases);
-  const setTrackAliases = useTelemetryStore(s => s.setTrackAliases);
-  const session = useTelemetryStore(s => s.session);
+  const settings = useSettings();
 
   const [protectedServer, setProtectedServer] = useState<boolean | null>(null);
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const [key, setKey] = useState(getControlKey());
   const [keyState, setKeyState] = useState<'unknown' | 'ok' | 'rejected'>('unknown');
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [savedId, setSavedId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/access').then(r => r.json()).then(d => setProtectedServer(!!d.protected)).catch(() => setProtectedServer(null));
     fetch('/health').then(r => setBackendUp(r.ok)).catch(() => setBackendUp(false));
-    fetch('/api/tracks/aliases').then(r => r.json()).then(d => setTrackAliases(d.aliases ?? {})).catch(() => {});
-  }, [setTrackAliases]);
+  }, []);
 
-  // Prove the key with a harmless write: re-saving a nickname to its current value.
+  // Prove the key with a harmless write: an empty alias on a track id nobody uses.
   const saveKey = async () => {
     setControlKey(key.trim());
     if (!key.trim()) { setKeyState('unknown'); return; }
-    const probe = TRACKS[0];
-    const res = await apiFetch(`/api/tracks/${probe.id}/alias`, {
+    const res = await apiFetch('/api/tracks/probe/alias', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nickname: trackAliases[probe.id] ?? '' }),
+      body: JSON.stringify({ nickname: '' }),
     }).catch(() => null);
     setKeyState(res?.ok ? 'ok' : 'rejected');
   };
 
-  const saveAlias = async (id: string) => {
-    const nickname = (drafts[id] ?? trackAliases[id] ?? '').trim();
-    if (nickname === (trackAliases[id] ?? '')) return;
-    const res = await apiFetch(`/api/tracks/${id}/alias`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nickname }),
-    }).catch(() => null);
-    if (res?.ok) {
-      const data = await res.json();
-      setTrackAliases(data.aliases ?? {});
-      setSavedId(id);
-      setTimeout(() => setSavedId(s => (s === id ? null : s)), 1500);
-    } else if (res?.status === 403) {
-      setKeyState('rejected');
-    }
-  };
-
-  const currentTrackId = session?.track_id != null ? String(session.track_id) : null;
-  const orderedTracks = useMemo(
-    () => [...TRACKS].sort((a, b) => (a.id === currentTrackId ? -1 : b.id === currentTrackId ? 1 : 0)),
-    [currentTrackId],
-  );
-
-  const writesBlocked = protectedServer === true && (!getControlKey() || keyState === 'rejected');
-
   return (
     <div className="h-full flex gap-px p-px overflow-hidden bg-motorsport-border">
       {/* ── Left: who may press the buttons, and whether the backend is there ── */}
-      <div className="w-[360px] shrink-0 flex flex-col gap-px min-h-0">
+      <div className="w-[380px] shrink-0 flex flex-col gap-px min-h-0">
         <div className="telemetry-panel p-4 flex flex-col gap-4">
           <div className="flex items-baseline justify-between">
             <span className="text-[16px] font-bold tracking-wide text-motorsport-text">Access</span>
@@ -110,41 +73,48 @@ export default function SetupConfig() {
         </div>
       </div>
 
-      {/* ── Right: what to call each circuit ── */}
-      <div className="flex-1 min-w-0 telemetry-panel flex flex-col min-h-0 overflow-hidden">
+      {/* ── Right: how things read on this browser ── */}
+      <div className="flex-1 min-w-0 telemetry-panel flex flex-col min-h-0 overflow-y-auto">
         <div className="px-4 py-3 border-b border-motorsport-border flex items-baseline justify-between">
-          <span className="text-[16px] font-bold tracking-wide text-motorsport-text">Track nicknames</span>
-          <span className="text-[12px] text-motorsport-muted font-semibold">shown in the header and the recorded list</span>
+          <span className="text-[16px] font-bold tracking-wide text-motorsport-text">Display</span>
+          <span className="text-[12px] text-motorsport-muted font-semibold">saved on this browser</span>
         </div>
-        {writesBlocked && (
-          <div className="px-4 py-2 text-[13px] text-motorsport-yellow border-b border-motorsport-border">
-            Set a valid control key on the left to save nicknames.
-          </div>
-        )}
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {orderedTracks.map(t => {
-            const draft = drafts[t.id] ?? trackAliases[t.id] ?? '';
-            const current = t.id === currentTrackId;
-            return (
-              <div key={t.id} className={`flex items-center gap-4 px-4 h-11 border-b border-motorsport-border/60 ${current ? 'bg-motorsport-orange/[0.06]' : ''}`}>
-                <span className="w-[160px] shrink-0 text-[14px] font-bold tracking-wide text-motorsport-text truncate">
-                  {t.name}
-                  {current && <span className="ml-2 text-[11px] text-motorsport-orange font-bold uppercase">now</span>}
-                </span>
-                <input
-                  value={draft}
-                  maxLength={80}
-                  disabled={writesBlocked}
-                  onChange={e => setDrafts(d => ({ ...d, [t.id]: e.target.value }))}
-                  onBlur={() => saveAlias(t.id)}
-                  onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                  placeholder="nickname"
-                  className="flex-1 min-w-0 max-w-[360px] bg-transparent border-b border-motorsport-border px-1 h-8 text-[14px] text-motorsport-text placeholder:text-motorsport-dim focus:outline-none focus:border-motorsport-orange disabled:opacity-40"
-                />
-                <span className="w-16 text-[12px] font-semibold text-motorsport-green">{savedId === t.id ? 'saved' : ''}</span>
-              </div>
-            );
-          })}
+        <div className="divide-y divide-motorsport-border/60">
+          <Choice
+            label="Speed" help="Speed readout and traces"
+            value={settings.speedUnit} onChange={v => settings.set('speedUnit', v)}
+            options={[['kmh', 'km/h'], ['mph', 'mph']]}
+          />
+          <Choice
+            label="Tyre temperature" help="Surface and inner temperatures"
+            value={settings.tempUnit} onChange={v => settings.set('tempUnit', v)}
+            options={[['c', '°C'], ['f', '°F']]}
+          />
+          <Choice
+            label="Tyre pressure" help="Pressure under each tyre"
+            value={settings.pressureUnit} onChange={v => settings.set('pressureUnit', v)}
+            options={[['psi', 'psi'], ['bar', 'bar']]}
+          />
+          <Choice
+            label="Lap segments" help="Slices in the Recorded segment table"
+            value={settings.segments} onChange={v => settings.set('segments', v)}
+            options={[[8, '8'], [12, '12'], [20, '20'], [30, '30']]}
+          />
+          <Choice
+            label="Live trace height" help="The telemetry strip under the live page"
+            value={settings.traceHeight} onChange={v => settings.set('traceHeight', v)}
+            options={[[240, 'Compact'], [320, 'Normal'], [400, 'Tall']]}
+          />
+          <Choice
+            label="Replay speed" help="Default rate when a recording starts playing"
+            value={settings.replaySpeed} onChange={v => settings.set('replaySpeed', v)}
+            options={[[0.5, '0.5×'], [1, '1×'], [2, '2×'], [4, '4×']]}
+          />
+          <Choice
+            label="Car picker" help="Which cars the picker on the live page lists"
+            value={settings.hideAiDrivers} onChange={v => settings.set('hideAiDrivers', v)}
+            options={[[false, 'Everyone'], [true, 'Humans only']]}
+          />
         </div>
       </div>
     </div>
@@ -156,6 +126,34 @@ function Row({ label, value, color }: { label: string; value: string; color?: st
     <div className="flex items-baseline justify-between gap-3">
       <span className="eng-label">{label}</span>
       <span className="text-[13px] font-semibold text-right" style={{ color: color ?? '#E8EEF4' }}>{value}</span>
+    </div>
+  );
+}
+
+function Choice<T extends string | number | boolean>({
+  label, help, value, options, onChange,
+}: {
+  label: string; help: string; value: T; options: [T, string][]; onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex items-center gap-4 px-4 h-14">
+      <div className="flex flex-col gap-1 w-[220px] shrink-0">
+        <span className="text-[14px] font-bold tracking-wide text-motorsport-text">{label}</span>
+        <span className="text-[12px] text-motorsport-muted">{help}</span>
+      </div>
+      <div className="flex border border-motorsport-border">
+        {options.map(([v, text]) => (
+          <button
+            key={String(v)}
+            onClick={() => onChange(v)}
+            className={`px-3 h-8 text-[12px] font-bold tracking-wide uppercase border-r last:border-r-0 border-motorsport-border transition-colors ${
+              v === value ? 'bg-motorsport-orange/15 text-motorsport-orange' : 'text-motorsport-muted hover:text-motorsport-text'
+            }`}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

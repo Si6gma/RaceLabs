@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Download, Trash2, Upload } from 'lucide-react';
+import { Download, Play, Trash2, Upload } from 'lucide-react';
+import { useReplay } from '@/stores/replayStore';
+import { useSettings } from '@/stores/settingsStore';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import type { ImportedLap, ImportedSession } from '@/types/telemetry';
 import TelemetryGraphCanvas, { CHANNELS, DEFAULT_VISIBLE } from '@/components/TelemetryGraphCanvas';
@@ -12,7 +14,6 @@ import { formatTime } from '@/utils/formatters';
 import { apiFetch } from '@/utils/api';
 import { deltaTrace, segmentTimes, detectCorners, cornerMetrics, lapStats } from '@/utils/lapAnalysis';
 
-const SEGMENTS = 12;
 const PURPLE = '#B388FF';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
@@ -50,11 +51,13 @@ export default function Recorded() {
   const setImportedSessions = useTelemetryStore(s => s.setImportedSessions);
   const removeImportedSession = useTelemetryStore(s => s.removeImportedSession);
   const setImportModalOpen = useTelemetryStore(s => s.setImportModalOpen);
-  const trackAliases = useTelemetryStore(s => s.trackAliases);
-  const trackLabel = (track: string, trackId?: string) => (trackId && trackAliases[trackId]) || track;
+  const loadReplay = useReplay(s => s.load);
+  const SEGMENTS = useSettings(s => s.segments);
+  const replaySpeed = useSettings(s => s.replaySpeed);
 
   const [query, setQuery] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [lapRenaming, setLapRenaming] = useState<{ id: string; value: string } | null>(null);
   const [session, setSession] = useState<(ImportedSession & { laps: ImportedLap[] }) | null>(null);
   const [laps, setLaps] = useState<LoadedLap[]>([]);
   const [loadingLaps, setLoadingLaps] = useState(false);
@@ -306,6 +309,42 @@ export default function Recorded() {
     }
   };
 
+  const renameLap = async (id: string, nickname: string) => {
+    setLapRenaming(null);
+    const value = nickname.trim();
+    const current = laps.find(l => l.meta.id === id)?.meta.nickname ?? '';
+    if (value === current) return;
+    const res = await apiFetch(`${API_URL}/api/import/laps/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: value }),
+    });
+    if (res.ok) {
+      setLaps(prev => prev.map(l => (l.meta.id === id ? { ...l, meta: { ...l.meta, nickname: value || null } } : l)));
+    }
+  };
+
+  const playInLive = () => {
+    if (!session) return;
+    loadReplay(
+      {
+        id: session.id, name: session.name, trackId: session.track_id != null ? Number(session.track_id) : undefined,
+        trackLength: session.track_length ?? 0, sessionType: session.session_type,
+      },
+      laps
+        .filter(l => (l.meta.lap_time_ms ?? 0) > 0 && l.samples.length > 1)
+        .map(l => ({
+          number: l.meta.lap_number,
+          timeMs: l.meta.lap_time_ms ?? 0,
+          sectorsMs: [l.meta.sector1_ms ?? null, l.meta.sector2_ms ?? null, l.meta.sector3_ms ?? null],
+          nickname: l.meta.nickname ?? null,
+          samples: l.samples,
+        })),
+      replaySpeed,
+    );
+    navigate('/');
+  };
+
   const renameSession = async (name: string) => {
     setRenaming(null);
     const trimmed = name.trim();
@@ -389,14 +428,14 @@ export default function Recorded() {
                   }`}
                 >
                   <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[15px] font-bold tracking-wide text-motorsport-text truncate">{s.name || trackLabel(s.track, s.track_id)}</span>
+                    <span className="text-[15px] font-bold tracking-wide text-motorsport-text truncate">{s.name || s.track}</span>
                     <span className="font-telemetry text-[13px] tabular-nums text-motorsport-purple shrink-0">
                       {s.best_lap_time_ms ? formatTime(s.best_lap_time_ms) : ''}
                     </span>
                   </div>
                   <div className="flex items-baseline justify-between gap-2 mt-1 text-[12px] text-motorsport-muted">
                     <span className="truncate">
-                      <span className="font-semibold">{trackLabel(s.track, s.track_id)}</span>
+                      <span className="font-semibold">{s.track}</span>
                       <span className="mx-1.5">·</span>
                       <span className="font-semibold uppercase tracking-wide">{s.session_type}</span>
                       <span className="mx-1.5">·</span>
@@ -438,6 +477,15 @@ export default function Recorded() {
                 </button>
               )}
               <div className="flex items-center gap-1 shrink-0">
+                <button
+                  onClick={playInLive}
+                  disabled={loadingLaps || laps.length === 0}
+                  title="Play this session on the live page"
+                  className="flex items-center gap-1.5 px-2 h-7 border border-motorsport-purple/60 text-[12px] font-bold tracking-wide uppercase text-motorsport-purple hover:bg-motorsport-purple/15 disabled:opacity-40 transition-colors"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  Play
+                </button>
                 <button onClick={exportSession} title="Export CSV" className="icon-btn"><Download className="w-4 h-4" /></button>
                 <button
                   onClick={deleteSession}
@@ -458,11 +506,15 @@ export default function Recorded() {
                 const on = selected.includes(meta.id);
                 const colour = on ? colourOf(meta.id) : undefined;
                 const isBest = session.best_lap_time_ms != null && meta.lap_time_ms === session.best_lap_time_ms;
+                const editing = lapRenaming?.id === meta.id;
                 return (
-                  <button
+                  <div
                     key={meta.id}
-                    onClick={() => toggleLap(meta.id)}
-                    className={`w-full flex items-center gap-3 px-3 h-12 border-l-2 border-b border-b-motorsport-border/60 text-left transition-colors ${
+                    role="button"
+                    onClick={() => { if (!editing) toggleLap(meta.id); }}
+                    onDoubleClick={() => setLapRenaming({ id: meta.id, value: meta.nickname ?? '' })}
+                    title="Click to compare, double-click to name this lap"
+                    className={`w-full flex items-center gap-3 px-3 h-12 border-l-2 border-b border-b-motorsport-border/60 text-left cursor-pointer transition-colors ${
                       on ? 'bg-motorsport-surface' : 'hover:bg-motorsport-surface/60'
                     }`}
                     style={{ borderLeftColor: colour ?? 'transparent' }}
@@ -479,12 +531,30 @@ export default function Recorded() {
                         {[meta.sector1_ms, meta.sector2_ms, meta.sector3_ms].map(sectorTime).join('  ')}
                       </span>
                     </span>
-                    <span className="ml-auto flex items-center gap-1.5 text-[12px] text-motorsport-muted shrink-0">
-                      {!meta.valid && <span className="text-motorsport-red font-semibold">invalid</span>}
-                      {meta.partial && <span>partial</span>}
-                      {meta.pit_lap && <span>pit</span>}
-                    </span>
-                  </button>
+                    {editing ? (
+                      <input
+                        autoFocus
+                        value={lapRenaming.value}
+                        maxLength={40}
+                        placeholder="name this lap"
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => setLapRenaming({ id: meta.id, value: e.target.value })}
+                        onBlur={e => renameLap(meta.id, e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') renameLap(meta.id, (e.target as HTMLInputElement).value);
+                          if (e.key === 'Escape') setLapRenaming(null);
+                        }}
+                        className="ml-auto w-[120px] bg-motorsport-dark border border-motorsport-border-strong px-2 h-7 text-[12px] text-motorsport-text focus:outline-none focus:border-motorsport-orange"
+                      />
+                    ) : (
+                      <span className="ml-auto flex items-center gap-1.5 text-[12px] text-motorsport-muted shrink-0 min-w-0">
+                        {meta.nickname && <span className="font-semibold text-motorsport-text truncate max-w-[110px]">{meta.nickname}</span>}
+                        {!meta.valid && <span className="text-motorsport-red font-semibold">invalid</span>}
+                        {meta.partial && <span>partial</span>}
+                        {meta.pit_lap && <span>pit</span>}
+                      </span>
+                    )}
+                  </div>
                 );
               })}
             </div>

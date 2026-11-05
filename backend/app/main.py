@@ -315,6 +315,20 @@ async def get_session_telemetry(
     return data
 
 
+class LapNicknameUpdate(BaseModel):
+    nickname: str = Field(max_length=40)
+
+
+@app.patch("/api/import/laps/{lap_id}")
+async def set_lap_nickname(lap_id: str, body: LapNicknameUpdate, db: AsyncSession = Depends(get_db)):
+    """Set a lap's nickname; an empty string clears it. Returns the lap."""
+    service = CSVImportService(db)
+    lap = await service.set_lap_nickname(lap_id, body.nickname)
+    if not lap:
+        raise HTTPException(status_code=404, detail="Lap not found")
+    return lap
+
+
 @app.get("/api/import/laps/{lap_id}/telemetry")
 async def get_lap_telemetry(lap_id: str, db: AsyncSession = Depends(get_db)):
     """Get telemetry samples for a specific lap."""

@@ -102,6 +102,7 @@ class ImportedLap(Base):
     min_speed = Column(Float)
     extra_data = Column(JSON, default=dict)
     resampled_data = Column(JSON)
+    nickname = Column(String)
 
     session = relationship("ImportedSession", back_populates="laps")
     samples = relationship("TelemetrySample", back_populates="lap")

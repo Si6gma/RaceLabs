@@ -29,6 +29,12 @@ async def init_db():
             ADD COLUMN IF NOT EXISTS resampled_data JSONB
         """))
 
+        # Migration: add nickname column to imported_laps if missing
+        await conn.execute(text("""
+            ALTER TABLE imported_laps
+            ADD COLUMN IF NOT EXISTS nickname VARCHAR
+        """))
+
         # Convert telemetry_samples to a TimescaleDB hypertable partitioned by time.
         # create_hypertable is idempotent when if_not_exists => TRUE.
         await conn.execute(text("""

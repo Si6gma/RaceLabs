@@ -1,6 +1,7 @@
 import { memo, useLayoutEffect, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatGear } from '@/utils/formatters';
+import { useSettings, speedValue, speedLabel } from '@/stores/settingsStore';
 
 const GREEN = '#00E85A';
 const RED   = '#FF2044';
@@ -102,6 +103,7 @@ function DriverInputsPanel() {
   const t = useTelemetryStore(s => s.currentFrame?.telemetry);
   const m = useTelemetryStore(s => s.currentFrame?.motion);
   const maxRpm = useTelemetryStore(s => s.currentFrame?.status?.max_rpm);
+  const speedUnit = useSettings(s => s.speedUnit);
 
   const speed    = t?.speed    ?? 0;
   const gear     = t?.gear     ?? 0;
@@ -134,9 +136,9 @@ function DriverInputsPanel() {
         <div className="flex items-end justify-between shrink-0">
           <div className="flex items-baseline gap-1.5">
             <span className="font-telemetry font-bold leading-none tabular-nums text-motorsport-text" style={{ fontSize: '56px' }}>
-              {speed.toFixed(0)}
+              {speedValue(speed, speedUnit).toFixed(0)}
             </span>
-            <span className="text-[13px] text-motorsport-muted font-semibold">km/h</span>
+            <span className="text-[13px] text-motorsport-muted font-semibold">{speedLabel(speedUnit)}</span>
           </div>
           <span className="font-telemetry font-bold leading-none tabular-nums text-motorsport-text" style={{ fontSize: '56px' }}>
             {formatGear(gear)}

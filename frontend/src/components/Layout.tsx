@@ -107,13 +107,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const replayMode = useTelemetryStore(s => s.replayMode);
   const recording  = useTelemetryStore(s => s.recording);
   const setRecording = useTelemetryStore(s => s.setRecording);
-  const trackAliases = useTelemetryStore(s => s.trackAliases);
-  const setTrackAliases = useTelemetryStore(s => s.setTrackAliases);
 
   useEffect(() => {
     fetch('/api/recording/status').then(r => r.json()).then(d => setRecording(d.recording)).catch(() => {});
-    fetch('/api/tracks/aliases').then(r => r.json()).then(d => setTrackAliases(d.aliases ?? {})).catch(() => {});
-  }, [setRecording, setTrackAliases]);
+  }, [setRecording]);
 
   async function toggleRecording() {
     const endpoint = recording ? '/api/recording/stop' : '/api/recording/start';
@@ -126,18 +123,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }
 
   const recordedLaps = session?.recorded_laps ?? 0;
-  const trackName = session
-    ? (session.track_id != null && trackAliases[String(session.track_id)]) || session.track
-    : undefined;
 
   return (
     <div className="h-screen flex flex-col bg-motorsport-black overflow-hidden">
       <header className="h-12 bg-motorsport-charcoal border-b border-motorsport-border flex items-center px-4 gap-6 shrink-0">
-        {/* Wordmark and the three tabs */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          <span className="w-2.5 h-2.5 bg-motorsport-orange" />
-          <span className="text-[18px] font-bold tracking-wide text-motorsport-text leading-none">RaceLabs</span>
-        </div>
+        {/* Wordmark: the mark plus the name, and a way home */}
+        <NavLink to="/" className="flex items-center gap-2 shrink-0 group" title="Live">
+          <img src="/logo.svg" alt="" className="w-6 h-6" />
+          <span className="text-[19px] font-bold tracking-wide text-motorsport-text leading-none group-hover:text-motorsport-orange transition-colors">
+            Race<span className="font-medium text-motorsport-muted group-hover:text-motorsport-orange transition-colors">Labs</span>
+          </span>
+        </NavLink>
         <nav className="flex items-stretch h-full shrink-0">
           {NAV.map(item => (
             <NavLink
@@ -162,7 +158,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Where we are, and what race control is showing */}
         <div className="flex-1 flex items-center justify-center gap-2 min-w-0">
-          <SessionStatusBoxMemo track={trackName} sessionType={session?.session_type} />
+          <SessionStatusBoxMemo track={session?.track} sessionType={session?.session_type} />
           <RaceControlBoxMemo />
         </div>
 

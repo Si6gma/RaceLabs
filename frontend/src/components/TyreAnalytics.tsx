@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { useSettings, tempValue, pressureText, type TempUnit, type PressureUnit } from '@/stores/settingsStore';
 
 interface TyreAnalyticsProps {
   surfaceTemps?: number[];
@@ -33,9 +34,9 @@ function tempColor(t: number): string {
 const TYRE_LABELS = ['FL', 'FR', 'RL', 'RR'];
 
 function TyreCard({
-  label, surface, inner, pressure, wear,
+  label, surface, inner, pressure, wear, tempUnit, pressureUnit,
 }: {
-  label: string; surface: number; inner: number; pressure: number; wear: number;
+  label: string; surface: number; inner: number; pressure: number; wear: number; tempUnit: TempUnit; pressureUnit: PressureUnit;
 }) {
   const health    = Math.max(0, 100 - wear);
   const wearColor = wear > 70 ? '#FF2044' : wear > 40 ? '#FFD000' : '#00E85A';
@@ -47,13 +48,13 @@ function TyreCard({
       <div className="flex items-baseline justify-between">
         <span className="text-[13px] font-bold tracking-wide text-motorsport-text">{label}</span>
         <span className="font-telemetry text-[26px] font-bold tabular-nums leading-none" style={{ color: tempColor(surface) }}>
-          {surface > 0 ? `${surface.toFixed(0)}°` : '--'}
+          {surface > 0 ? `${tempValue(surface, tempUnit).toFixed(0)}°` : '--'}
         </span>
       </div>
       <div className="flex items-baseline justify-between">
         <span className="text-[12px] text-motorsport-muted font-semibold">inner</span>
         <span className="font-telemetry text-[14px] tabular-nums leading-none" style={{ color: tempColor(inner) }}>
-          {inner > 0 ? `${inner.toFixed(0)}°` : '--'}
+          {inner > 0 ? `${tempValue(inner, tempUnit).toFixed(0)}°` : '--'}
         </span>
       </div>
 
@@ -71,7 +72,7 @@ function TyreCard({
       <div className="flex items-baseline justify-between">
         <span className="text-[12px] text-motorsport-muted font-semibold">pressure</span>
         <span className="font-telemetry text-[13px] text-motorsport-text tabular-nums leading-none">
-          {pressure > 0 ? `${pressure.toFixed(1)} psi` : '--'}
+          {pressure > 0 ? pressureText(pressure, pressureUnit) : '--'}
         </span>
       </div>
     </div>
@@ -87,6 +88,8 @@ function TyreAnalytics({
   tyreAgeLaps  = 0,
 }: TyreAnalyticsProps) {
   const meta = COMPOUND_META[compound] ?? { name: compound ? `C${compound}` : '', color: '#9AACBE' };
+  const tempUnit = useSettings(s => s.tempUnit);
+  const pressureUnit = useSettings(s => s.pressureUnit);
 
   return (
     <div className="telemetry-panel relative h-full overflow-hidden p-2 grid grid-cols-2 grid-rows-2 gap-2">
@@ -99,6 +102,8 @@ function TyreAnalytics({
           inner={innerTemps[i]     ?? 0}
           pressure={pressures[i]   ?? 0}
           wear={wear[i]            ?? 0}
+          tempUnit={tempUnit}
+          pressureUnit={pressureUnit}
         />
       ))}
 

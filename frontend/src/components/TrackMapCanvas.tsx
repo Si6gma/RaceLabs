@@ -24,6 +24,18 @@ interface Props {
   posZ?: number;
   lapNumber?: number;
   sessionType?: number;
+  /** Sector 1 and sector 2 end, metres from the start line, once learned. */
+  sectorDistances?: [number | null, number | null];
+}
+
+// Nearest point on a polyline to p: used to stretch a sector line edge to edge.
+function nearest(poly: Pt[], p: Pt): Pt {
+  let best = poly[0], bestD = Infinity;
+  for (const q of poly) {
+    const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2;
+    if (d < bestD) { bestD = d; best = q; }
+  }
+  return best;
 }
 
 // ── geometry helpers ──────────────────────────────────────────────────────────
@@ -118,6 +130,7 @@ function TrackMap({
   posZ = 0,
   lapNumber,
   sessionType,
+  sectorDistances,
 }: Props) {
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const needsDraw  = useRef(true);
@@ -131,8 +144,8 @@ function TrackMap({
   const lastSessRef     = useRef<number | undefined>(undefined);
   const traceBounds     = useRef({ minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity });
 
-  const propsRef = useRef({ trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType });
-  propsRef.current = { trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType };
+  const propsRef = useRef({ trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType, sectorDistances });
+  propsRef.current = { trackId, trackLength, playerCarIndex, allLapDistances, carTeamIds, posX, posZ, lapNumber, sessionType, sectorDistances };
 
   // ── rAF draw loop ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -164,7 +177,7 @@ function TrackMap({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      const { trackId: tid, trackLength: tlen, playerCarIndex: pci, allLapDistances: dists, carTeamIds: teams, posX: px, posZ: pz } = propsRef.current;
+      const { trackId: tid, trackLength: tlen, playerCarIndex: pci, allLapDistances: dists, carTeamIds: teams, posX: px, posZ: pz, sectorDistances: sectors } = propsRef.current;
       const outline = tid !== undefined ? outlines[String(tid)] : undefined;
 
       if (outline) {
@@ -199,6 +212,30 @@ function TrackMap({
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
         ctx.stroke();
+
+        // Sector lines, edge to edge, once the boundaries have been learned
+        if (sectors && tlen && tlen > 0) {
+          sectors.forEach((dist, i) => {
+            if (dist == null) return;
+            const c = interpCenterline(geo.centerline, geo.arcLengths, dist / tlen);
+            const a = nearest(geo.edgeLeft, c);
+            const b = nearest(geo.edgeRight, c);
+            ctx.beginPath();
+            ctx.moveTo(a[0], a[1]);
+            ctx.lineTo(b[0], b[1]);
+            ctx.strokeStyle = '#9AACBE';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            // Label just off the outside of the line
+            const nx = b[0] - a[0], ny = b[1] - a[1];
+            const len = Math.hypot(nx, ny) || 1;
+            ctx.fillStyle = '#9AACBE';
+            ctx.font = '600 12px "Barlow Condensed", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`S${i + 1}`, b[0] + (nx / len) * 12, b[1] + (ny / len) * 12);
+          });
+        }
 
         // Car dots (positioned by lap_distance along screen-space centerline)
         if (dists && tlen && tlen > 0) {

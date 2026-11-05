@@ -8,6 +8,8 @@ import ERSSuite from '@/components/ERSSuite';
 import TelemetryTimeline from '@/components/TelemetryTimeline';
 import ReplayBar from '@/components/ReplayBar';
 import { useSettings } from '@/stores/settingsStore';
+import { SectorBoundaryLearner } from '@/utils/sectorLines';
+import { useRef } from 'react';
 
 function LiveDashboard() {
   const currentFrame = useTelemetryStore(s => s.currentFrame);
@@ -23,6 +25,11 @@ function LiveDashboard() {
 
   // Highlight the car being watched on the map (defaults to the player's own car)
   const viewedCarIndex = selectedCarIndex ?? currentFrame?.player_car_index;
+
+  // Sector lines are learned from the whole grid as cars cross them
+  const sectorLearner = useRef(new SectorBoundaryLearner());
+  sectorLearner.current.update(currentFrame?.lap_all, currentFrame?.session?.track_id);
+  const sectorDistances = sectorLearner.current.distances();
 
   useEffect(() => {
     if (replayMode) return;
@@ -73,6 +80,7 @@ function LiveDashboard() {
             posZ={m?.world_pos_z}
             lapNumber={l?.current_lap_num}
             sessionType={currentFrame?.session?.session_type}
+            sectorDistances={sectorDistances}
           />
         </div>
 

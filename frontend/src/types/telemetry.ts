@@ -176,6 +176,7 @@ export interface ImportedSession {
   best_lap_time_ms?: number;
   status: string;
   metadata?: Record<string, any>;
+  extra_data?: Record<string, any>;
 }
 
 export interface ImportedLap {

@@ -16,6 +16,44 @@ import { deltaTrace, segmentTimes, detectCorners, cornerMetrics, lapStats } from
 
 const PURPLE = '#B388FF';
 
+// Sessions on the same circuit closer together than this belong to one race week.
+const WEEK_GAP_MS = 8 * 60 * 60 * 1000;
+// The order a weekend runs in, for listing sessions inside a week.
+const TYPE_ORDER = ['P1', 'P2', 'P3', 'Short P', 'Q1', 'Q2', 'Q3', 'Short Q', 'One-Shot Q', 'Race', 'Race 2', 'Race 3', 'Time Trial'];
+
+interface Week {
+  key: string;
+  track: string;
+  start: string;
+  sessions: ImportedSession[];
+}
+
+function groupWeeks(sessions: ImportedSession[]): Week[] {
+  const asc = [...sessions].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const weeks: Week[] = [];
+  for (const s of asc) {
+    const last = weeks[weeks.length - 1];
+    const prev = last?.sessions[last.sessions.length - 1];
+    const sameWeek = prev && last.track === s.track
+      && new Date(s.created_at).getTime() - new Date(prev.created_at).getTime() < WEEK_GAP_MS;
+    if (sameWeek) last.sessions.push(s);
+    else weeks.push({ key: `week:${s.track_id ?? s.track}:${s.created_at.slice(0, 16)}`, track: s.track, start: s.created_at, sessions: [s] });
+  }
+  const rank = (t: string) => { const i = TYPE_ORDER.indexOf(t); return i < 0 ? TYPE_ORDER.length : i; };
+  for (const w of weeks) w.sessions.sort((a, b) => rank(a.session_type) - rank(b.session_type) || a.created_at.localeCompare(b.created_at));
+  return weeks.reverse();
+}
+
+// A race that stopped before its last lap, or a session we only caught part of.
+function sessionIsPartial(s: ImportedSession): boolean {
+  const planned = Number(s.extra_data?.total_laps ?? 0);
+  return s.source === 'live' && s.session_type.startsWith('Race') && planned > 0 && s.lap_count < planned;
+}
+
+function weekDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
 const API_URL = import.meta.env.VITE_API_URL || '';
 
 // Lap colours stay clear of the channel colours and of orange (selection).
@@ -58,6 +96,32 @@ export default function Recorded() {
   const [query, setQuery] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null);
   const [lapRenaming, setLapRenaming] = useState<{ id: string; value: string } | null>(null);
+  const [weekNames, setWeekNames] = useState<Record<string, string>>({});
+  const [weekRenaming, setWeekRenaming] = useState<{ key: string; value: string } | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  // Week nicknames live in the backend's alias store, keyed by the week key.
+  useEffect(() => {
+    fetch(`${API_URL}/api/tracks/aliases`).then(r => r.json()).then(d => setWeekNames(d.aliases ?? {})).catch(() => {});
+  }, []);
+
+  const renameWeek = async (key: string, name: string) => {
+    setWeekRenaming(null);
+    const value = name.trim();
+    if (value === (weekNames[key] ?? '')) return;
+    const res = await apiFetch(`${API_URL}/api/tracks/${encodeURIComponent(key)}/alias`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: value }),
+    }).catch(() => null);
+    if (res?.ok) setWeekNames((await res.json()).aliases ?? {});
+  };
+
+  const toggleWeek = (key: string) => setCollapsed(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
   const [session, setSession] = useState<(ImportedSession & { laps: ImportedLap[] }) | null>(null);
   const [laps, setLaps] = useState<LoadedLap[]>([]);
   const [loadingLaps, setLoadingLaps] = useState(false);
@@ -96,13 +160,17 @@ export default function Recorded() {
     return () => clearInterval(id);
   }, [refreshSessions]);
 
-  const sessions = useMemo(() => {
+  const weeks = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = q
-      ? importedSessions.filter(s => `${s.name} ${s.track} ${s.session_type}`.toLowerCase().includes(q))
-      : importedSessions;
-    return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at));
-  }, [importedSessions, query]);
+    const all = groupWeeks(importedSessions);
+    if (!q) return all;
+    return all
+      .map(w => ({
+        ...w,
+        sessions: w.sessions.filter(s => `${weekNames[w.key] ?? ''} ${s.name} ${s.track} ${s.session_type}`.toLowerCase().includes(q)),
+      }))
+      .filter(w => w.sessions.length > 0);
+  }, [importedSessions, query, weekNames]);
 
   // ── Selected session and its laps ───────────────────────────────────────────
   useEffect(() => {
@@ -415,42 +483,91 @@ export default function Recorded() {
             </button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
-            {sessions.length === 0 && (
+            {weeks.length === 0 && (
               <div className="px-3 py-6 text-[13px] text-motorsport-muted leading-relaxed">
                 {importedSessions.length === 0
                   ? 'No sessions yet. Press REC on the live page while driving, or import a CSV.'
                   : 'Nothing matches that search.'}
               </div>
             )}
-            {sessions.map(s => {
-              const active = s.id === sessionId;
+            {weeks.map(w => {
+              const open = !collapsed.has(w.key);
+              const anyPartial = w.sessions.some(sessionIsPartial);
+              const editing = weekRenaming?.key === w.key;
+              const title = weekNames[w.key] || `${w.track} · ${weekDate(w.start)}`;
               return (
-                <button
-                  key={s.id}
-                  onClick={() => navigate(`/recorded/${s.id}`)}
-                  className={`w-full text-left px-3 py-2.5 border-l-2 border-b border-b-motorsport-border/60 transition-colors ${
-                    active ? 'border-l-motorsport-orange bg-motorsport-orange/[0.07]' : 'border-l-transparent hover:bg-motorsport-surface'
-                  }`}
-                >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-[15px] font-bold tracking-wide text-motorsport-text truncate">{s.name || s.track}</span>
-                    <span className="font-telemetry text-[13px] tabular-nums text-motorsport-purple shrink-0">
-                      {s.best_lap_time_ms ? formatTime(s.best_lap_time_ms) : ''}
+                <div key={w.key} className="border-b border-motorsport-border">
+                  {/* Week: click to fold, double-click to name */}
+                  <div
+                    role="button"
+                    onClick={() => { if (!editing) toggleWeek(w.key); }}
+                    onDoubleClick={() => setWeekRenaming({ key: w.key, value: weekNames[w.key] ?? '' })}
+                    title="Click to fold, double-click to name this race week"
+                    className="flex items-center gap-2 px-3 h-10 cursor-pointer bg-motorsport-dark hover:bg-motorsport-surface transition-colors"
+                  >
+                    <span className="text-motorsport-muted text-[11px] w-3 shrink-0">{open ? '▾' : '▸'}</span>
+                    {editing ? (
+                      <input
+                        autoFocus
+                        value={weekRenaming.value}
+                        maxLength={80}
+                        placeholder={`${w.track} · ${weekDate(w.start)}`}
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => setWeekRenaming({ key: w.key, value: e.target.value })}
+                        onBlur={e => renameWeek(w.key, e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') renameWeek(w.key, (e.target as HTMLInputElement).value);
+                          if (e.key === 'Escape') setWeekRenaming(null);
+                        }}
+                        className="flex-1 min-w-0 bg-motorsport-panel border border-motorsport-border-strong px-2 h-7 text-[14px] font-bold text-motorsport-text focus:outline-none focus:border-motorsport-orange"
+                      />
+                    ) : (
+                      <span className="flex-1 min-w-0 flex items-baseline gap-2">
+                        <span className="text-[15px] font-bold tracking-wide text-motorsport-text truncate">{title}</span>
+                        {weekNames[w.key] && <span className="text-[12px] text-motorsport-muted font-semibold truncate">{w.track}</span>}
+                      </span>
+                    )}
+                    <span className="text-[12px] text-motorsport-muted font-semibold shrink-0">
+                      {anyPartial && <span className="text-motorsport-yellow mr-2">partial</span>}
+                      {w.sessions.length} session{w.sessions.length === 1 ? '' : 's'}
                     </span>
                   </div>
-                  <div className="flex items-baseline justify-between gap-2 mt-1 text-[12px] text-motorsport-muted">
-                    <span className="truncate">
-                      <span className="font-semibold">{s.track}</span>
-                      <span className="mx-1.5">·</span>
-                      <span className="font-semibold uppercase tracking-wide">{s.session_type}</span>
-                      <span className="mx-1.5">·</span>
-                      {s.source === 'live' ? 'recorded' : 'csv'}
-                      <span className="mx-1.5">·</span>
-                      {s.lap_count} lap{s.lap_count === 1 ? '' : 's'}
-                    </span>
-                    <span className="font-telemetry tabular-nums shrink-0">{sessionDate(s.created_at)}</span>
-                  </div>
-                </button>
+
+                  {open && w.sessions.map(s => {
+                    const active = s.id === sessionId;
+                    const partial = sessionIsPartial(s);
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => navigate(`/recorded/${s.id}`)}
+                        className={`w-full text-left pl-7 pr-3 py-2 border-l-2 border-t border-t-motorsport-border/50 transition-colors ${
+                          active ? 'border-l-motorsport-orange bg-motorsport-orange/[0.07]' : 'border-l-transparent hover:bg-motorsport-surface'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-2 min-w-0">
+                            <span className="px-1.5 h-5 inline-flex items-center border border-motorsport-border-strong text-[11px] font-bold tracking-wide uppercase text-motorsport-text shrink-0">
+                              {s.session_type}
+                            </span>
+                            <span className="text-[14px] font-bold tracking-wide text-motorsport-text truncate">{s.name}</span>
+                          </span>
+                          <span className="font-telemetry text-[13px] tabular-nums text-motorsport-purple shrink-0">
+                            {s.best_lap_time_ms ? formatTime(s.best_lap_time_ms) : ''}
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 mt-1 text-[12px] text-motorsport-muted">
+                          <span className="truncate">
+                            {s.lap_count} lap{s.lap_count === 1 ? '' : 's'}
+                            {partial && <span className="text-motorsport-yellow font-semibold ml-1.5">partial · {s.lap_count} of {Number(s.extra_data?.total_laps)}</span>}
+                            <span className="mx-1.5">·</span>
+                            {s.source === 'live' ? 'recorded' : 'csv'}
+                          </span>
+                          <span className="font-telemetry tabular-nums shrink-0">{sessionDate(s.created_at)}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               );
             })}
           </div>

@@ -101,6 +101,40 @@ export default function TrackMapViewer({ laps, currentPoint, currentPoints }: Pr
       ctx.globalAlpha = 1;
       ctx.restore();
 
+      // Start line and sector lines from the reference lap: short ticks across
+      // the path where the sample's sector steps, drawn in screen space.
+      const ref = laps[0].data;
+      const toScreen = (s: TelemetryPoint): [number, number] => [
+        (s.world_position_x - cx) * S + W / 2 + panX,
+        (s.world_position_y - cy) * S + H / 2 + panY,
+      ];
+      const marks: Array<{ index: number; label: string }> = [{ index: 0, label: 'S/F' }];
+      for (let i = 1; i < ref.length; i++) {
+        if (ref[i].sector === ref[i - 1].sector + 1 && ref[i].sector <= 2) marks.push({ index: i, label: `S${ref[i].sector}` });
+      }
+      ctx.font = '600 12px "Barlow Condensed", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const { index, label } of marks) {
+        const a = ref[Math.max(0, index - 3)];
+        const b = ref[Math.min(ref.length - 1, index + 3)];
+        const [x, y] = toScreen(ref[index]);
+        const [ax, ay] = toScreen(a);
+        const [bx, by] = toScreen(b);
+        const dx = bx - ax, dy = by - ay;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len;
+        const half = 9;
+        ctx.beginPath();
+        ctx.moveTo(x - nx * half, y - ny * half);
+        ctx.lineTo(x + nx * half, y + ny * half);
+        ctx.strokeStyle = label === 'S/F' ? '#E8EEF4' : '#9AACBE';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = label === 'S/F' ? '#E8EEF4' : '#9AACBE';
+        ctx.fillText(label, x + nx * (half + 12), y + ny * (half + 12));
+      }
+
       // Current-point dots — drawn in screen space so they're always 5px radius
       const pointsToDraw: CurrentPoint[] = currentPoints ?? (currentPoint ? [{ point: currentPoint, color: '#fff' }] : []);
       pointsToDraw.forEach(({ point, color }) => {

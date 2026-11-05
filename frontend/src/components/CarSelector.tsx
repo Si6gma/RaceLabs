@@ -40,13 +40,20 @@ function CarSelector() {
     };
   }, [open]);
 
-  // Only meaningful once we know who's in the session (multiplayer / grid).
-  if (participants.length <= 1) return null;
-
   const viewedIndex = selectedCarIndex ?? playerCarIndex ?? null;
   const viewed      = participants.find(p => p.index === viewedIndex);
   const spectating  = selectedCarIndex !== null;
   const title       = viewed ? viewed.name : 'My car';
+
+  // Until the grid is known there is nothing to pick, but the row keeps its
+  // height so the tower does not jump when the participants packet lands.
+  if (participants.length <= 1) {
+    return (
+      <div className="shrink-0 border-b border-motorsport-border flex items-center px-3 h-9">
+        <span className="text-[15px] font-bold tracking-wide text-motorsport-text">My car</span>
+      </div>
+    );
+  }
 
   const choose = (index: number | null) => {
     setSelectedCarIndex(index);

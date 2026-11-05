@@ -21,24 +21,18 @@ function deltaColor(ms: number): string {
 const GOOD = '#00E85A';
 const BAD  = '#FF2044';
 
-// Ahead: a shrinking gap is good. Behind: a growing gap is good.
-// The sign says which for the driver: + good (green), − bad (red).
-function isGood(changeMs: number | null, behind: boolean): boolean | null {
-  return changeMs == null ? null : behind ? changeMs > 0 : changeMs < 0;
-}
-
-function Rate({ label, changeMs, behind }: { label: string; changeMs: number | null; behind: boolean }) {
-  const good = isGood(changeMs, behind);
-  return (
-    <span className="font-telemetry text-[13px] tabular-nums leading-none" style={{ color: good == null ? '#5F7183' : good ? GOOD : BAD }}>
-      <span className="text-motorsport-muted">{label} </span>
-      {changeMs == null ? '--' : `${good ? '+' : '−'}${(Math.abs(changeMs) / 1000).toFixed(2)}/lap`}
-    </span>
-  );
+// How the interval moved over the last lap, said the way a pit wall says it.
+// A smaller gap to the car ahead is good; a bigger gap to the car behind is good.
+function trendWords(trendMs: number | null, behind: boolean): { text: string; good: boolean } | null {
+  if (trendMs == null || Math.abs(trendMs) < 5) return null;
+  const closing = trendMs < 0;
+  const amount = `${(Math.abs(trendMs) / 1000).toFixed(2)} s/lap`;
+  if (behind) return closing ? { text: `closing in ${amount}`, good: false } : { text: `pulling away ${amount}`, good: true };
+  return closing ? { text: `closing ${amount}`, good: true } : { text: `losing ${amount}`, good: false };
 }
 
 function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; name: string; behind: boolean }) {
-  const good = isGood(gap?.trendMs ?? gap?.nowMs ?? null, behind);
+  const trend = trendWords(gap?.trendMs ?? null, behind);
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-2">
@@ -47,15 +41,13 @@ function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; 
       </div>
       <span
         className="font-telemetry text-[28px] font-bold tabular-nums leading-none"
-        style={{ color: good == null ? '#E8EEF4' : good ? GOOD : BAD }}
+        style={{ color: trend == null ? '#E8EEF4' : trend.good ? GOOD : BAD }}
       >
-        {gap ? `${(gap.gapMs / 1000).toFixed(3)}s` : '--.---'}
+        {gap ? `${behind ? '+' : '−'}${(gap.gapMs / 1000).toFixed(3)}s` : '--.---'}
       </span>
-      {/* NOW: the gap's derivative over the last ~300 m. LAP: vs this spot last lap. */}
-      <div className="flex items-baseline justify-between">
-        <Rate label="Now" changeMs={gap?.nowMs ?? null} behind={behind} />
-        <Rate label="Lap" changeMs={gap?.trendMs ?? null} behind={behind} />
-      </div>
+      <span className="text-[13px] font-semibold leading-none h-[13px]" style={{ color: trend == null ? '#5F7183' : trend.good ? GOOD : BAD }}>
+        {trend ? trend.text : gap ? 'first lap' : ''}
+      </span>
     </div>
   );
 }

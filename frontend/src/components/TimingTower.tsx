@@ -124,14 +124,15 @@ function TimingTower() {
           </div>
         </div>
 
-        {/* Races: gaps to the cars either side. Otherwise: delta vs best. */}
+        {/* Races: gaps to the cars either side. Otherwise: delta vs best.
+            Both take the same height so nothing below moves between sessions. */}
         {isRace ? (
-        <div className="px-3 py-3 bg-motorsport-dark shrink-0 flex flex-col gap-4">
+        <div className="px-3 py-3 bg-motorsport-dark shrink-0 h-[180px] flex flex-col justify-between">
           <GapRow label="Ahead" gap={gaps.ahead} name={gaps.ahead ? nameOf(gaps.ahead.carIndex) : ''} behind={false} />
           <GapRow label="Behind" gap={gaps.behind} name={gaps.behind ? nameOf(gaps.behind.carIndex) : ''} behind />
         </div>
         ) : (
-        <div className="px-3 py-3 bg-motorsport-dark shrink-0 flex flex-col gap-1.5">
+        <div className="px-3 py-3 bg-motorsport-dark shrink-0 h-[180px] flex flex-col justify-center gap-2">
           <span className="eng-label">Delta to best</span>
           <span
             className="font-telemetry font-bold tabular-nums leading-none"

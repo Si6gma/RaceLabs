@@ -10,43 +10,53 @@ export interface DrsZone {
 // Zones further apart than this are different zones.
 const ZONE_MERGE_M = 400;
 
-// DRS zones learned from the grid: `drs_allowed` switching on marks the
-// activation point, `drs` switching off marks the end of the zone.
+// DRS zones learned from the grid: each car's stretch with the flap open is a
+// span, spans that start near each other are one zone. Where cars open it is
+// the activation line (smallest start wins), where they close it is the end.
+// `drs_allowed` is not used: in a race it flickers with the one-second gap.
 export class DrsZoneLearner {
   private trackId: number | undefined;
-  private lastAllowed = new Map<number, number>();
   private lastOpen = new Map<number, number>();
+  private openedAt = new Map<number, number>();
   private zoneList: DrsZone[] = [];
 
-  update(laps: LapData[] | undefined, status: CarStatus[] | undefined, telemetry: CarTelemetry[] | undefined, trackId: number | undefined): void {
+  update(laps: LapData[] | undefined, _status: CarStatus[] | undefined, telemetry: CarTelemetry[] | undefined, trackId: number | undefined): void {
     if (trackId !== this.trackId) {
       this.trackId = trackId;
-      this.lastAllowed.clear();
       this.lastOpen.clear();
+      this.openedAt.clear();
       this.zoneList = [];
     }
-    if (!laps || !status || !telemetry) return;
+    if (!laps || !telemetry) return;
     let changed = false;
     laps.forEach((car, idx) => {
-      const allowed = status[idx]?.drs_allowed ?? 0;
       const open = telemetry[idx]?.drs ?? 0;
-      const prevAllowed = this.lastAllowed.get(idx);
       const prevOpen = this.lastOpen.get(idx);
-      this.lastAllowed.set(idx, allowed);
       this.lastOpen.set(idx, open);
       const d = car.lap_distance;
       if (d <= 0) return;
-      if (prevAllowed === 0 && allowed === 1) {
-        const zone = this.zoneList.find(z => Math.abs(z.start - d) < ZONE_MERGE_M);
-        if (zone) { if (d < zone.start) { zone.start = d; changed = true; } }
-        else { this.zoneList.push({ start: d, end: null }); changed = true; }
-      }
+      if (prevOpen === 0 && open === 1) this.openedAt.set(idx, d);
       if (prevOpen === 1 && open === 0) {
-        const zone = [...this.zoneList].reverse().find(z => z.start < d && d - z.start < 1500);
-        if (zone && (zone.end == null || d > zone.end)) { zone.end = d; changed = true; }
+        const start = this.openedAt.get(idx);
+        this.openedAt.delete(idx);
+        if (start == null) return;
+        // A span that wraps past the start line is a zone starting near the end
+        // of the lap; keep its start and let the end stay unknown.
+        const end = d > start ? d : null;
+        if (end != null && end - start > 1500) return;
+        changed = this.absorb({ start, end }) || changed;
       }
     });
     if (changed) this.zoneList = [...this.zoneList].sort((a, b) => a.start - b.start).map(z => ({ ...z }));
+  }
+
+  private absorb(span: DrsZone): boolean {
+    const zone = this.zoneList.find(z => Math.abs(z.start - span.start) < ZONE_MERGE_M);
+    if (!zone) { this.zoneList.push({ ...span }); return true; }
+    let changed = false;
+    if (span.start < zone.start) { zone.start = span.start; changed = true; }
+    if (span.end != null && (zone.end == null || span.end > zone.end)) { zone.end = span.end; changed = true; }
+    return changed;
   }
 
   zones(): DrsZone[] {
@@ -57,18 +67,11 @@ export class DrsZoneLearner {
     if (trackId === undefined || !zones.length) return;
     if (trackId !== this.trackId) {
       this.trackId = trackId;
-      this.lastAllowed.clear();
       this.lastOpen.clear();
+      this.openedAt.clear();
       this.zoneList = [];
     }
-    for (const z of zones) {
-      const have = this.zoneList.find(x => Math.abs(x.start - z.start) < ZONE_MERGE_M);
-      if (!have) this.zoneList.push({ ...z });
-      else {
-        have.start = Math.min(have.start, z.start);
-        if (z.end != null) have.end = have.end == null ? z.end : Math.max(have.end, z.end);
-      }
-    }
+    for (const z of zones) this.absorb(z);
     this.zoneList = [...this.zoneList].sort((a, b) => a.start - b.start);
   }
 }

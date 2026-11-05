@@ -113,10 +113,10 @@ from app.sector_bounds import DrsZoneLearner, merge_drs_zones  # noqa: E402
 
 
 def drs_frame(*states):
-    """Each state is (lap_distance, drs_allowed, drs_open) for one car; returns the three arrays."""
-    laps = [{"lap_distance": d} for d, _, _ in states]
-    status = [{"drs_allowed": a} for _, a, _ in states]
-    tel = [{"drs": o} for _, _, o in states]
+    """Each state is (lap_distance, drs_open) for one car; returns the three per-car arrays."""
+    laps = [{"lap_distance": d} for d, _ in states]
+    status = [{} for _ in states]
+    tel = [{"drs": o} for _, o in states]
     return laps, status, tel
 
 
@@ -130,57 +130,69 @@ class DrsLearnerTest(unittest.TestCase):
     def test_starts_empty(self):
         self.assertEqual(self.learner.zones(), [])
 
-    def test_activation_adds_open_zone(self):
-        self.assertFalse(self.feed((1000.0, 0, 0)))
-        self.assertTrue(self.feed((1210.0, 1, 0)))
-        self.assertEqual(self.learner.zones(), [{"start": 1210.0, "end": None}])
+    def test_opening_alone_learns_nothing(self):
+        self.assertFalse(self.feed((1000.0, 0)))
+        self.assertFalse(self.feed((1210.0, 1)))
+        self.assertEqual(self.learner.zones(), [])
 
-    def test_nearby_activation_keeps_smaller_start(self):
-        self.feed((1000.0, 0, 0), (900.0, 0, 0))
-        self.feed((1210.0, 1, 0), (1000.0, 0, 0))
-        self.assertTrue(self.feed((1300.0, 1, 0), (1190.0, 1, 0)))
-        self.assertEqual(self.learner.zones(), [{"start": 1190.0, "end": None}])
-        self.assertFalse(self.feed((1300.0, 0, 0), (1200.0, 0, 0)))
-        self.assertFalse(self.feed((1400.0, 1, 0), (1250.0, 1, 0)))
-        self.assertEqual(self.learner.zones(), [{"start": 1190.0, "end": None}])
+    def test_open_then_close_is_a_zone(self):
+        self.feed((1000.0, 0))
+        self.feed((1210.0, 1))
+        self.assertTrue(self.feed((1900.0, 0)))
+        self.assertEqual(self.learner.zones(), [{"start": 1210.0, "end": 1900.0}])
 
-    def test_far_activation_adds_second_zone_sorted(self):
-        self.feed((4000.0, 0, 0))
-        self.feed((4100.0, 1, 0))
-        self.feed((4100.0, 0, 0))
-        self.assertTrue(self.feed((1200.0, 1, 0)))
+    def test_nearby_span_grows_the_zone_at_both_ends(self):
+        self.feed((1000.0, 0), (900.0, 0))
+        self.feed((1210.0, 1), (1190.0, 1))
+        self.assertTrue(self.feed((1900.0, 0), (1960.0, 0)))
+        self.assertEqual(self.learner.zones(), [{"start": 1190.0, "end": 1960.0}])
+        self.feed((1250.0, 1), (1300.0, 1))
+        self.assertFalse(self.feed((1930.0, 0), (1920.0, 0)))
+        self.assertEqual(self.learner.zones(), [{"start": 1190.0, "end": 1960.0}])
+
+    def test_far_span_adds_second_zone_sorted(self):
+        self.feed((4000.0, 0))
+        self.feed((4100.0, 1))
+        self.feed((4600.0, 0))
+        self.feed((1200.0, 1))
+        self.assertTrue(self.feed((1800.0, 0)))
         self.assertEqual([z["start"] for z in self.learner.zones()], [1200.0, 4100.0])
 
-    def test_deactivation_sets_end_of_nearest_zone(self):
-        self.feed((1000.0, 0, 0))
-        self.feed((1210.0, 1, 1))
-        self.assertTrue(self.feed((1900.0, 1, 0)))
-        self.assertEqual(self.learner.zones(), [{"start": 1210.0, "end": 1900.0}])
-        self.feed((1950.0, 1, 1))
-        self.assertTrue(self.feed((1960.0, 1, 0)))
-        self.assertEqual(self.learner.zones()[0]["end"], 1960.0)
-        self.feed((1970.0, 1, 1))
-        self.assertFalse(self.feed((1930.0, 1, 0)))
+    def test_closing_past_the_start_line_leaves_end_unknown(self):
+        self.feed((6500.0, 0))
+        self.feed((6800.0, 1))
+        self.assertTrue(self.feed((40.0, 0)))
+        self.assertEqual(self.learner.zones(), [{"start": 6800.0, "end": None}])
 
-    def test_deactivation_too_far_or_before_start_is_ignored(self):
-        self.feed((1000.0, 0, 0))
-        self.feed((1210.0, 1, 0))
-        self.feed((1100.0, 1, 1))
-        self.assertFalse(self.feed((1150.0, 1, 0)))
-        self.feed((2000.0, 1, 1))
-        self.assertFalse(self.feed((2800.0, 1, 0)))
-        self.assertEqual(self.learner.zones(), [{"start": 1210.0, "end": None}])
+    def test_span_too_long_is_dropped(self):
+        self.feed((1000.0, 0))
+        self.feed((1210.0, 1))
+        self.assertFalse(self.feed((2800.0, 0)))
+        self.assertEqual(self.learner.zones(), [])
 
-    def test_zero_distance_is_ignored(self):
-        self.feed((0.0, 0, 0))
-        self.assertFalse(self.feed((0.0, 1, 0)))
+    def test_flickering_drs_allowed_is_irrelevant(self):
+        # Only the wing matters: nothing happens without a drs 0->1->0 cycle.
+        laps, _, tel = drs_frame((1000.0, 0))
+        for allowed in (0, 1, 0, 1):
+            self.assertFalse(self.learner.update(laps, [{"drs_allowed": allowed}], tel, SPA))
+        self.assertEqual(self.learner.zones(), [])
+
+    def test_opening_at_zero_distance_is_ignored(self):
+        self.feed((0.0, 0))
+        self.feed((0.0, 1))
+        self.assertFalse(self.feed((300.0, 0)))
+        self.assertEqual(self.learner.zones(), [])
+
+    def test_closing_without_a_seen_opening_is_ignored(self):
+        self.feed((1500.0, 1))  # already open when first seen
+        self.assertFalse(self.feed((1900.0, 0)))
         self.assertEqual(self.learner.zones(), [])
 
     def test_track_change_resets_and_seed_applies(self):
         self.learner.seed(11, [{"start": 500.0, "end": 1100.0}])
-        self.feed((1000.0, 0, 0))
-        self.feed((1210.0, 1, 0))
-        self.assertFalse(self.feed((1000.0, 1, 0), track=11))
+        self.feed((1000.0, 0))
+        self.feed((1210.0, 1))
+        self.assertFalse(self.feed((1000.0, 0), track=11))
         self.assertEqual(self.learner.zones(), [{"start": 500.0, "end": 1100.0}])
         self.assertEqual(self.learner.zones(SPA), [])
 
@@ -209,10 +221,13 @@ class PipelineDrsTest(unittest.TestCase):
         pipe = TelemetryPipeline()
         pipe._start_session()
         pipe._update_session({"track_id": SPA, "session_type": 10, "track_length": 7004, "total_laps": 5})
-        laps, status, tel = drs_frame((1000.0, 0, 0))
+        laps, status, tel = drs_frame((1000.0, 0))
         pipe._multicar.update({"lap_all": laps, "status_all": status, "telemetry_all": tel})
         pipe._learn_drs()
-        pipe._multicar["status_all"] = [{"drs_allowed": 1}]
+        pipe._multicar["telemetry_all"] = [{"drs": 1}]
         pipe._multicar["lap_all"] = [{"lap_distance": 1210.0}]
         pipe._learn_drs()
-        self.assertEqual(pipe.get_session_summary()["drs_zones"], [{"start": 1210.0, "end": None}])
+        pipe._multicar["telemetry_all"] = [{"drs": 0}]
+        pipe._multicar["lap_all"] = [{"lap_distance": 1900.0}]
+        pipe._learn_drs()
+        self.assertEqual(pipe.get_session_summary()["drs_zones"], [{"start": 1210.0, "end": 1900.0}])

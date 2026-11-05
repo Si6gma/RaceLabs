@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from typing import Any, Dict, List
 
-from app.live_recorder import FinalizedLap, LiveRecorder
+from app.live_recorder import FinalizedLap, GridLapResult, LiveRecorder
 
 TRACK_LENGTH = 5000.0
 META = {
@@ -279,6 +279,164 @@ class RecorderTest(unittest.IsolatedAsyncioTestCase):
             rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
             await rec.drain()
         self.assertEqual(rec.status()["recorded_laps"], 0)
+
+
+def grid_lap(lap_num: int, lap_distance: float = 0.0, **fields: Any) -> Dict[str, Any]:
+    base = {
+        "current_lap_num": lap_num, "lap_distance": lap_distance, "car_position": 1,
+        "result_status": 2, "last_lap_time_ms": 0, "current_lap_invalid": False,
+        "sector1_time_minutes": 0, "sector1_time_ms": 28000, "sector2_time_minutes": 1, "sector2_time_ms": 500,
+    }
+    base.update(fields)
+    return base
+
+
+def empty_slot() -> Dict[str, Any]:
+    return {"current_lap_num": 0, "lap_distance": 0.0, "car_position": 0, "result_status": 0}
+
+
+class FieldAndGridTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.saved: List[FinalizedLap] = []
+        self.flushed: List[List[GridLapResult]] = []
+
+        async def persist(lap: FinalizedLap):
+            self.saved.append(lap)
+
+        async def persist_grid(meta: Dict[str, Any], laps: List[GridLapResult]):
+            self.flushed.append(laps)
+
+        self.rec = LiveRecorder(session_factory=None, persist=persist, persist_grid=persist_grid)
+        self.rec.start()
+
+    def drive_lap(self, lap_num: int, count: int = 50, **fields: Any):
+        for i in range(count):
+            self.rec.on_sample(sample(lap_num, i, **fields), META)
+
+    async def test_field_frames_throttled_to_ten_per_second(self):
+        self.drive_lap(1)
+        lap_all = [grid_lap(1, 100.0, car_position=3), grid_lap(1, 50.0, car_position=4)]
+        for tick in range(100):  # 60 Hz for ~1.65 s
+            self.rec.on_lap_all(lap_all, 100.0 + tick / 60.0)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        frames = self.saved[0].field_frames
+        self.assertEqual(len(frames), 17)
+        gaps = [b["t"] - a["t"] for a, b in zip(frames, frames[1:])]
+        self.assertTrue(all(g >= 0.1 - 1e-6 for g in gaps))
+        self.assertEqual(frames[0]["t"], 100.0)
+        self.assertEqual(len(frames[0]["cars"]), 22)
+        self.assertEqual(frames[0]["cars"][0], [100.0, 3, 1])
+        self.assertEqual(frames[0]["cars"][1], [50.0, 4, 1])
+        self.assertEqual(frames[0]["cars"][21], [0, 0, 0])
+        self.assertEqual(self.saved[0].session_time_start, 100.0)
+
+    async def test_empty_slots_are_zeroed(self):
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 100.0), empty_slot()], 100.0)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        self.assertEqual(self.saved[0].field_frames[0]["cars"][1], [0, 0, 0])
+
+    async def test_frames_dropped_with_a_discarded_lap(self):
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 100.0)], 100.0)
+        self.rec.stop()
+        self.rec.start()
+        self.drive_lap(2)
+        self.rec.on_sample(sample(3, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        self.assertEqual([lap.lap_number for lap in self.saved], [2])
+        self.assertEqual(self.saved[0].field_frames, [])
+
+    async def test_frames_ignored_when_not_recording_or_no_lap_in_progress(self):
+        self.rec.on_lap_all([grid_lap(1, 100.0)], 100.0)  # no player lap yet
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 200.0)], 100.5)
+        self.rec.stop()
+        self.rec.on_lap_all([grid_lap(1, 300.0)], 101.0)
+        self.rec.start()
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 400.0)], 102.0)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        self.assertEqual([f["cars"][0][0] for f in self.saved[0].field_frames], [400.0])
+
+    async def test_grid_lap_completes_with_sectors_and_validity(self):
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 100.0), grid_lap(1, 50.0)], 100.0)
+        self.rec.on_lap_all([grid_lap(1, 4900.0), grid_lap(1, 4800.0, current_lap_invalid=True)], 100.2)
+        self.rec.on_lap_all([grid_lap(2, 10.0, last_lap_time_ms=91000),
+                             grid_lap(2, 5.0, last_lap_time_ms=93000, sector1_time_ms=1)], 100.4)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        laps = self.saved[0].grid_laps
+        self.assertEqual(len(laps), 2)
+        self.assertEqual(laps[0], GridLapResult(0, 1, 91000, 28000, 60500, 2500, True))
+        # sectors come from the car's last sample of the finished lap; invalid flag sticks
+        self.assertEqual(laps[1], GridLapResult(1, 1, 93000, 28000, 60500, 4500, False))
+        self.assertEqual(self.rec.status()["grid_laps"], 2)
+
+    async def test_grid_lap_without_time_or_sectors(self):
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 100.0, sector1_time_ms=0), grid_lap(1, 100.0)], 100.0)
+        self.rec.on_lap_all([grid_lap(2, 10.0, last_lap_time_ms=91000), grid_lap(2, 10.0, last_lap_time_ms=0)], 100.4)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        laps = self.saved[0].grid_laps
+        self.assertEqual(len(laps), 1)
+        self.assertEqual((laps[0].sector1_ms, laps[0].sector2_ms, laps[0].sector3_ms), (None, 60500, None))
+
+    async def test_grid_laps_wait_for_the_next_saved_player_lap(self):
+        self.drive_lap(1, count=5)  # too short: dropped, but the grid laps are kept
+        self.rec.on_lap_all([grid_lap(1, 100.0)], 100.0)
+        self.rec.on_lap_all([grid_lap(2, 10.0, last_lap_time_ms=91000)], 100.4)
+        self.rec.on_sample(sample(2, 0, last_lap_time_ms=92345), META)
+        self.drive_lap(2)
+        self.rec.on_sample(sample(3, 0, last_lap_time_ms=92345), META)
+        await self.rec.drain()
+
+        self.assertEqual([lap.lap_number for lap in self.saved], [2])
+        self.assertEqual([g.lap_number for g in self.saved[0].grid_laps], [1])
+
+    async def test_pending_grid_laps_flushed_on_stop(self):
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 100.0)], 100.0)
+        self.rec.on_lap_all([grid_lap(2, 10.0, last_lap_time_ms=91000)], 100.4)
+        self.rec.stop()
+        await self.rec.drain()
+
+        self.assertEqual(self.saved, [])
+        self.assertEqual(len(self.flushed), 1)
+        self.assertEqual(self.flushed[0][0].lap_time_ms, 91000)
+        self.assertEqual(self.rec.status()["grid_laps"], 1)
+
+    async def test_pending_grid_laps_flushed_on_session_end(self):
+        self.drive_lap(1)
+        self.rec.on_lap_all([grid_lap(1, 100.0)], 100.0)
+        self.rec.on_lap_all([grid_lap(2, 10.0, last_lap_time_ms=91000)], 100.4)
+        self.rec.on_event("SEND")
+        await self.rec.drain()
+
+        self.assertEqual(len(self.flushed), 1)
+        # A fresh session: the car's lap 2 is unknown again, so no completion from this increment
+        self.rec.on_lap_all([grid_lap(3, 10.0, last_lap_time_ms=90000)], 200.0)
+        self.rec.stop()
+        await self.rec.drain()
+        self.assertEqual(len(self.flushed), 1)
+
+    async def test_nothing_flushed_without_pending_grid_laps(self):
+        self.drive_lap(1)
+        self.rec.stop()
+        await self.rec.drain()
+
+        self.assertEqual(self.flushed, [])
 
 
 if __name__ == "__main__":

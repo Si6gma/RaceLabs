@@ -63,34 +63,22 @@ def _min(a: Optional[float], b: Optional[float]) -> Optional[float]:
     return min(a, b)
 
 
-# Activation points closer than this belong to the same DRS zone.
+# Zone starts closer than this belong to the same DRS zone.
 DRS_ZONE_MATCH_M = 400.0
-# A DRS deactivation further than this past a zone's start is not that zone's end.
+# A DRS span longer than this is not one zone (a wrong wing state, a stale start).
 DRS_ZONE_MAX_LENGTH_M = 1500.0
 
 Zone = Dict[str, Optional[float]]
 
 
-def _with_activation(zones: List[Zone], distance: float) -> List[Zone]:
-    """Zones after a DRS activation at `distance`: lowers a matching start or adds a zone."""
-    for i, zone in enumerate(zones):
-        if abs(zone["start"] - distance) < DRS_ZONE_MATCH_M:
-            if distance >= zone["start"]:
-                return zones
-            return _sorted(zones[:i] + [{**zone, "start": distance}] + zones[i + 1:])
-    return _sorted(zones + [{"start": distance, "end": None}])
-
-
-def _with_deactivation(zones: List[Zone], distance: float) -> List[Zone]:
-    """Zones after DRS closed at `distance`: the nearest zone starting before it grows to reach it."""
-    candidates = [i for i, z in enumerate(zones) if z["start"] < distance < z["start"] + DRS_ZONE_MAX_LENGTH_M]
-    if not candidates:
-        return zones
-    i = max(candidates, key=lambda idx: zones[idx]["start"])
-    end = zones[i]["end"]
-    if end is not None and end >= distance:
-        return zones
-    return zones[:i] + [{**zones[i], "end": distance}] + zones[i + 1:]
+def drs_span(start: float, closed_at: float) -> Optional[Zone]:
+    """The zone one open-to-close of the wing describes, or None when it cannot be one zone.
+    Closing at or before the start means the car wrapped past the line: the end is unknown."""
+    if closed_at <= start:
+        return {"start": start, "end": None}
+    if closed_at - start > DRS_ZONE_MAX_LENGTH_M:
+        return None
+    return {"start": start, "end": closed_at}
 
 
 def merge_drs_zones(stored: List[Zone], new: List[Zone]) -> List[Zone]:
@@ -120,13 +108,15 @@ def _max(a: Optional[float], b: Optional[float]) -> Optional[float]:
 
 
 class DrsZoneLearner:
-    """Learns DRS zones from where cars gain DRS permission (zone start) and where DRS closes (zone end)."""
+    """Learns DRS zones from the wing itself: where a car opens DRS is a zone start, where it
+    closes again is that zone's end."""
 
     def __init__(self):
         self._track_id: Optional[int] = None
         self._zones: List[Zone] = []
-        self._prev_allowed: Dict[int, int] = {}
         self._prev_drs: Dict[int, int] = {}
+        # lap_distance at which each car last opened DRS.
+        self._opened_at: Dict[int, float] = {}
         self._seeds: Dict[int, List[Zone]] = {}
 
     def seed(self, track_id: int, zones: List[Zone]):
@@ -140,30 +130,30 @@ class DrsZoneLearner:
         return [dict(z) for z in self._seeds.get(track_id, [])]
 
     def update(self, lap_all: List[dict], status_all: List[dict], telemetry_all: List[dict], track_id: int) -> bool:
-        """Feed the latest per-car arrays. Returns True when a zone was added or changed."""
+        """Feed the latest per-car arrays (status_all is unused). Returns True when a zone was added or grew."""
         if track_id != self._track_id:
             self._reset(track_id)
-        zones = self._zones
-        for idx, (lap, status, tel) in enumerate(zip(lap_all, status_all, telemetry_all)):
-            distance = lap.get("lap_distance", 0.0)
-            allowed = int(status.get("drs_allowed", 0))
+        spans: List[Zone] = []
+        for idx, (lap, tel) in enumerate(zip(lap_all, telemetry_all)):
+            distance = float(lap.get("lap_distance", 0.0))
             drs = int(tel.get("drs", 0))
-            prev_allowed = self._prev_allowed.get(idx)
-            prev_drs = self._prev_drs.get(idx)
-            self._prev_allowed[idx] = allowed
+            prev = self._prev_drs.get(idx)
             self._prev_drs[idx] = drs
-            if distance <= 0:
-                continue
-            if prev_allowed == 0 and allowed == 1:
-                zones = _with_activation(zones, distance)
-            if prev_drs == 1 and drs == 0:
-                zones = _with_deactivation(zones, distance)
+            if prev == 0 and drs == 1 and distance > 0:
+                self._opened_at[idx] = distance
+            elif prev == 1 and drs == 0 and idx in self._opened_at:
+                span = drs_span(self._opened_at.pop(idx), distance)
+                if span is not None:
+                    spans.append(span)
+        if not spans:
+            return False
+        zones = merge_drs_zones(self._zones, spans)
         changed = zones != self._zones
         self._zones = zones
         return changed
 
     def _reset(self, track_id: int):
         self._track_id = track_id
-        self._prev_allowed = {}
         self._prev_drs = {}
+        self._opened_at = {}
         self._zones = [dict(z) for z in self._seeds.get(track_id, [])]

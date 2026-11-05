@@ -344,6 +344,24 @@ async def get_session_telemetry(
     return data
 
 
+@app.get("/api/import/sessions/{session_id}/field")
+async def get_session_field(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Where the whole field was during each recorded lap, with participants and team ids."""
+    data = await CSVImportService(db).get_session_field(session_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+
+@app.get("/api/import/sessions/{session_id}/grid")
+async def get_session_grid(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Every car's completed laps in a live-recorded session."""
+    data = await CSVImportService(db).get_session_grid(session_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return data
+
+
 class LapNicknameUpdate(BaseModel):
     nickname: str = Field(max_length=40)
 

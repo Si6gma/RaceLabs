@@ -58,6 +58,8 @@ class SessionState:
     num_pit_stops: int = 0
     car_position: int = 0
     car_team_ids: List[int] = field(default_factory=list)
+    participants: List[Dict[str, Any]] = field(default_factory=list)
+    player_car_index: int = 0
 
 
 class TelemetryPipeline:
@@ -112,6 +114,10 @@ class TelemetryPipeline:
 
             if frame_dict.get("car_team_ids"):
                 self.session_state.car_team_ids = frame_dict["car_team_ids"]
+            if frame_dict.get("participants"):
+                self.session_state.participants = frame_dict["participants"]
+            if "player_car_index" in frame_dict:
+                self.session_state.player_car_index = frame_dict["player_car_index"]
 
             # Re-attach persisted team IDs to every frame so the frontend always has them
             if self.session_state.car_team_ids and "car_team_ids" not in frame_dict:
@@ -131,6 +137,8 @@ class TelemetryPipeline:
 
             if "lap_all" in frame_dict:
                 self._learn_sectors(frame_dict["lap_all"])
+                if self._recording and self.recorder:
+                    self.recorder.on_lap_all(frame_dict["lap_all"], frame_dict.get("session_time", 0.0))
 
             for key in _DRS_KEYS:
                 if key in frame_dict:
@@ -168,6 +176,8 @@ class TelemetryPipeline:
             state.session_type_id = previous.session_type_id
             state.total_laps = previous.total_laps
             state.car_team_ids = previous.car_team_ids
+            state.participants = previous.participants
+            state.player_car_index = previous.player_car_index
         self.session_state = state
         return state
 
@@ -320,6 +330,9 @@ class TelemetryPipeline:
             "weather": state.weather,
             "track_temp": state.track_temp,
             "air_temp": state.air_temp,
+            "player_car_index": state.player_car_index,
+            "participants": state.participants,
+            "car_team_ids": state.car_team_ids,
         }
 
     def get_current_frame(self) -> Optional[Dict[str, Any]]:

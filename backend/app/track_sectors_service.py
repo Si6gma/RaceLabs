@@ -12,6 +12,8 @@ from app.models import TrackSectors
 from app.sector_bounds import Zone, merge_drs_zones
 
 Bounds = Tuple[Optional[float], Optional[float]]
+# Bumped when the DRS learner changes in a way that makes stored zones untrustworthy.
+DRS_ZONES_VERSION = 2
 
 
 def merge_bounds(stored: Bounds, new: Bounds) -> Bounds:
@@ -55,5 +57,6 @@ class TrackSectorsService:
             existing.sector1_m, existing.sector2_m = merged
             existing.drs_zones = zones
             existing.updated_at = datetime.utcnow()
+        existing.drs_zones_version = DRS_ZONES_VERSION
         await self.db.commit()
         return after

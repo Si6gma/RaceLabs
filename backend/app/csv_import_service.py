@@ -10,7 +10,7 @@ from sqlalchemy import select, delete
 from app.csv_parser import validate_csv_preview, stream_csv_rows, CSVParseStats
 from app.csv_normalizer import normalize_telemetry_data
 from app.resampler import resample_lap
-from app.models import ImportedSession, ImportedLap, TelemetrySample
+from app.models import ImportedSession, ImportedLap, TelemetrySample, SessionField, GridLap
 
 
 def normalize_nickname(raw: str) -> Optional[str]:
@@ -324,6 +324,52 @@ class CSVImportService:
             "extra_data": extra,
         }
 
+    async def get_session_field(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Field positions recorded during each of the player's laps, with who was in the session.
+        Empty lists for sessions that were not live-recorded; None if the session is unknown."""
+        sid = uuid.UUID(session_id)
+        session = await self.db.get(ImportedSession, sid)
+        if not session:
+            return None
+        extra = session.extra_data or {}
+        result = await self.db.execute(
+            select(SessionField).where(SessionField.session_id == sid).order_by(SessionField.lap_number)
+        )
+        return {
+            "player_car_index": extra.get("player_car_index"),
+            "participants": extra.get("participants") or [],
+            "car_team_ids": extra.get("car_team_ids") or [],
+            "laps": [
+                {"lap_number": row.lap_number, "frames": row.frames or []}
+                for row in result.scalars().all()
+            ],
+        }
+
+    async def get_session_grid(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Every car's completed laps in a live-recorded session, by car then lap."""
+        sid = uuid.UUID(session_id)
+        session = await self.db.get(ImportedSession, sid)
+        if not session:
+            return None
+        result = await self.db.execute(
+            select(GridLap).where(GridLap.session_id == sid).order_by(GridLap.car_index, GridLap.lap_number)
+        )
+        return {
+            "participants": (session.extra_data or {}).get("participants") or [],
+            "laps": [
+                {
+                    "car_index": row.car_index,
+                    "lap_number": row.lap_number,
+                    "lap_time_ms": row.lap_time_ms,
+                    "sector1_ms": row.sector1_ms,
+                    "sector2_ms": row.sector2_ms,
+                    "sector3_ms": row.sector3_ms,
+                    "valid": bool(row.valid),
+                }
+                for row in result.scalars().all()
+            ],
+        }
+
     async def set_lap_nickname(self, lap_id: str, nickname: str) -> Optional[Dict[str, Any]]:
         """Set a lap's nickname; an empty string clears it. Returns the lap dict, or None if unknown."""
         lap = await self.db.get(ImportedLap, uuid.UUID(lap_id))
@@ -441,6 +487,8 @@ class CSVImportService:
             await self.db.execute(
                 delete(ImportedLap).where(ImportedLap.session_id == sid)
             )
+            await self.db.execute(delete(SessionField).where(SessionField.session_id == sid))
+            await self.db.execute(delete(GridLap).where(GridLap.session_id == sid))
             # Delete the session itself
             result = await self.db.execute(
                 delete(ImportedSession).where(ImportedSession.id == sid)

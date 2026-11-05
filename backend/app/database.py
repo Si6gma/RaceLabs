@@ -2,6 +2,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from app.config import get_settings
 from app.models import Base
+from app.track_sectors_service import DRS_ZONES_VERSION
 
 settings = get_settings()
 
@@ -39,6 +40,17 @@ async def init_db():
         await conn.execute(text("""
             ALTER TABLE track_sectors
             ADD COLUMN IF NOT EXISTS drs_zones JSONB
+        """))
+
+        # Migration: DRS zones learned before version 2 (from drs_allowed) were wrong; drop them once.
+        await conn.execute(text("""
+            ALTER TABLE track_sectors
+            ADD COLUMN IF NOT EXISTS drs_zones_version INTEGER
+        """))
+        await conn.execute(text(f"""
+            UPDATE track_sectors
+            SET drs_zones = NULL, drs_zones_version = {DRS_ZONES_VERSION}
+            WHERE drs_zones_version IS DISTINCT FROM {DRS_ZONES_VERSION}
         """))
 
         # Convert telemetry_samples to a TimescaleDB hypertable partitioned by time.

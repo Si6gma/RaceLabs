@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { TelemetryPoint } from '@/utils/telemetryAdapter';
-import type { TelemetryFrame } from '@/types/telemetry';
+import type { LapData, ParticipantInfo, TelemetryFrame } from '@/types/telemetry';
 import { useTelemetryStore, clearFrameHistory } from '@/stores/telemetryStore';
 
 // Plays a recorded session back through the live page by feeding the store
@@ -13,6 +13,28 @@ export interface ReplayLap {
   sectorsMs: [number | null, number | null, number | null];
   nickname: string | null;
   samples: TelemetryPoint[];
+  /** Game session_time at the lap's first sample, to line up with field frames. */
+  sessionTimeStart: number | null;
+}
+
+/** One snapshot of the whole grid: [lap_distance, car_position, current_lap_num] per car. */
+export interface FieldFrame { t: number; cars: [number, number, number][] }
+
+export interface ReplayField {
+  playerCarIndex: number | null;
+  participants: ParticipantInfo[];
+  carTeamIds: number[];
+  laps: Array<{ lap_number: number; frames: FieldFrame[] }>;
+}
+
+export interface GridLap {
+  car_index: number;
+  lap_number: number;
+  lap_time_ms: number;
+  sector1_ms: number | null;
+  sector2_ms: number | null;
+  sector3_ms: number | null;
+  valid: boolean;
 }
 
 export interface ReplaySession {
@@ -21,6 +43,21 @@ export interface ReplaySession {
   trackId: number | undefined;
   trackLength: number;
   sessionType: string;
+  field?: ReplayField;
+  grid?: GridLap[];
+}
+
+const RACE_TYPE_ID = 10;
+const PRACTICE_TYPE_ID = 1;
+
+function frameAt(frames: FieldFrame[], t: number): FieldFrame | null {
+  if (!frames.length) return null;
+  let lo = 0, hi = frames.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (frames[mid].t < t) lo = mid + 1; else hi = mid;
+  }
+  return frames[lo];
 }
 
 interface ReplayState {
@@ -99,22 +136,58 @@ function buildFrame(session: ReplaySession, laps: ReplayLap[], lapIdx: number, i
     tyres_wear: [0, 0, 0, 0], tyres_damage: [0, 0, 0, 0], front_left_wing_damage: 0, front_right_wing_damage: 0,
     rear_wing_damage: 0, floor_damage: 0, diffuser_damage: 0, sidepod_damage: 0, gear_box_damage: 0, engine_damage: 0,
   };
+  // With field data the whole grid comes back: every car's distance, position
+  // and lap at this moment, plus each car's last lap time from the grid laps.
+  const field = session.field;
+  const player = field?.playerCarIndex ?? 0;
+  let lapAll: LapData[] = [lapData];
+  let allDistances = [p.cumulative_distance];
+  let teamIds: number[] = [85];
+  let participants: ParticipantInfo[] = [];
+  if (field && lap.sessionTimeStart != null) {
+    const fieldLap = field.laps.find(f => f.lap_number === lap.number);
+    const snap = fieldLap ? frameAt(fieldLap.frames, lap.sessionTimeStart + intoLapMs / 1000) : null;
+    if (snap) {
+      const grid = session.grid ?? [];
+      lapAll = snap.cars.map(([dist, pos, lapNum], i) => {
+        if (i === player) return { ...lapData, car_position: pos || lapData.car_position };
+        const lastLap = grid.find(g => g.car_index === i && g.lap_number === lapNum - 1);
+        return {
+          ...lapData,
+          lap_distance: dist, total_distance: dist, car_position: pos, current_lap_num: lapNum,
+          current_lap_time_ms: 0, sector: 0, sector1_time_ms: 0, sector2_time_ms: 0,
+          last_lap_time_ms: lastLap?.lap_time_ms ?? 0, current_lap_invalid: false,
+          driver_status: dist > 0 ? 1 : 0, result_status: dist > 0 ? 2 : 0,
+        };
+      });
+      allDistances = snap.cars.map(c => c[0]);
+      teamIds = field.carTeamIds.length ? field.carTeamIds : teamIds;
+      participants = field.participants;
+    }
+  }
+  const isRace = session.sessionType.startsWith('Race');
+
   // The store projects the viewed car from the per-car arrays when they exist,
   // so the replay must supply its own or the last live grid would leak through.
   return {
     packet_id: 6,
     session_time: (useTelemetryStore.getState().currentFrame?.session_time ?? 0) + 0.033,
     frame_identifier: 0,
-    player_car_index: 0,
+    player_car_index: player,
     timestamp: Date.now(),
-    telemetry, motion, status, damage, lap: lapData,
-    telemetry_all: [telemetry], motion_all: [motion], status_all: [status], damage_all: [damage], lap_all: [lapData],
-    all_lap_distances: [p.cumulative_distance],
-    car_team_ids: [85],
-    participants: [],
+    telemetry, motion, status, damage, lap: lapAll[player] ?? lapData,
+    telemetry_all: lapAll.map(() => telemetry),
+    motion_all: lapAll.map(() => motion),
+    status_all: lapAll.map(() => status),
+    damage_all: lapAll.map(() => damage),
+    lap_all: lapAll,
+    all_lap_distances: allDistances,
+    car_team_ids: teamIds,
+    participants,
     session: {
       weather: 0, track_temperature: 0, air_temperature: 0, total_laps: laps.length, track_length: session.trackLength,
-      session_type: 1, track_id: session.trackId ?? -1, session_time_left: 0, session_duration: 0, safety_car_status: 0,
+      session_type: isRace && field ? RACE_TYPE_ID : PRACTICE_TYPE_ID, track_id: session.trackId ?? -1,
+      session_time_left: 0, session_duration: 0, safety_car_status: 0,
     },
   };
 }
@@ -133,6 +206,7 @@ export const useReplay = create<ReplayState>((set, get) => ({
     const tel = useTelemetryStore.getState();
     tel.setReplayMode(true);
     tel.setSelectedCarIndex(null);
+    tel.setSessionBest(null);
     tel.setSession({
       session_id: `replay-${session.id}`, track: session.name, track_id: session.trackId,
       session_type: session.sessionType, current_lap: laps[0]?.number ?? 0,

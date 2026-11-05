@@ -7,6 +7,11 @@ the CSV importer uses (ImportedSession / ImportedLap / TelemetrySample) with
 source = "live". Partial laps are never saved: the lap time comes from the
 next lap's first sample, so a lap that is cut short by a restart, a session
 change or the recorder stopping has nothing to be saved with.
+
+Alongside the player's laps it keeps, per LAP_DATA packet, where the whole field
+is (SessionField, at most 10 Hz, saved with the player lap it was driven during)
+and every car's completed laps (GridLap, flushed with each player lap save and
+when recording or the session ends).
 """
 import asyncio
 import logging
@@ -18,7 +23,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from sqlalchemy import insert, select
 
-from app.models import ImportedLap, ImportedSession, TelemetrySample
+from app.models import GridLap, ImportedLap, ImportedSession, SessionField, TelemetrySample
 from app.resampler import resample_lap
 
 logger = logging.getLogger(__name__)
@@ -34,6 +39,23 @@ PARTIAL_START_FRACTION = 0.02
 SAMPLE_FLUSH_THRESHOLD = 2000
 # A flashback rewinds lap_distance within the same lap. Smaller drops are jitter.
 FLASHBACK_REWIND_M = 20.0
+# Field positions are kept at most this often (session_time seconds).
+FIELD_FRAME_INTERVAL_S = 0.1
+GRID_SIZE = 22
+# The session extra_data keys describing who is in the session.
+ROSTER_KEYS = ("participants", "car_team_ids", "player_car_index")
+PARTICIPANT_KEYS = ("index", "name", "team_id", "race_number")
+
+
+@dataclass(frozen=True)
+class GridLapResult:
+    car_index: int
+    lap_number: int
+    lap_time_ms: int
+    sector1_ms: Optional[int]
+    sector2_ms: Optional[int]
+    sector3_ms: Optional[int]
+    valid: bool
 
 
 @dataclass(frozen=True)
@@ -51,6 +73,10 @@ class FinalizedLap:
     meta: Dict[str, Any]
     # time.time() minus session_time of the last sample: maps session_time onto the wall clock.
     wall_offset: float
+    # session_time of the lap's first sample: aligns lap time with the field frames.
+    session_time_start: float = 0.0
+    field_frames: List[Dict[str, Any]] = field(default_factory=list)
+    grid_laps: List[GridLapResult] = field(default_factory=list)
 
 
 @dataclass
@@ -62,6 +88,65 @@ class _LapInProgress:
     start_last_lap_ms: int = 0
     samples: List[Dict[str, Any]] = field(default_factory=list)
     flashbacks: int = 0
+    field_frames: List[Dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class _CarLap:
+    """One grid car's lap in progress, from its lap_all entries."""
+    lap_number: int
+    last: Dict[str, Any]
+    invalid: bool = False
+
+
+def sector_ms(lap: Dict[str, Any], number: int) -> int:
+    return int(lap.get(f"sector{number}_time_minutes") or 0) * 60000 + int(lap.get(f"sector{number}_time_ms") or 0)
+
+
+def split_sectors(lap_time_ms: int, s1: int, s2: int) -> tuple:
+    """(sector1, sector2, sector3) as stored: None where unknown, sector3 derived from the lap time."""
+    s3 = lap_time_ms - s1 - s2 if s1 > 0 and s2 > 0 else None
+    return s1 or None, s2 or None, s3 if s3 and s3 > 0 else None
+
+
+def complete_grid_lap(car_index: int, finished: _CarLap, lap_time_ms: int) -> Optional[GridLapResult]:
+    """The GridLapResult for a car whose lap counter just moved on, or None without a lap time."""
+    if lap_time_ms <= 0:
+        return None
+    s1, s2, s3 = split_sectors(lap_time_ms, sector_ms(finished.last, 1), sector_ms(finished.last, 2))
+    return GridLapResult(
+        car_index=car_index,
+        lap_number=finished.lap_number,
+        lap_time_ms=lap_time_ms,
+        sector1_ms=s1,
+        sector2_ms=s2,
+        sector3_ms=s3,
+        valid=not finished.invalid,
+    )
+
+
+def field_frame(lap_all: List[Dict[str, Any]], session_time: float) -> Dict[str, Any]:
+    """One snapshot of the field; cars not in the session are zeroed, missing slots too."""
+    cars = []
+    for index in range(GRID_SIZE):
+        lap = lap_all[index] if index < len(lap_all) else None
+        if lap is None or lap.get("result_status") in _SKIPPED_RESULT_STATUS:
+            cars.append([0, 0, 0])
+        else:
+            cars.append([float(lap.get("lap_distance") or 0), int(lap.get("car_position") or 0),
+                         int(lap.get("current_lap_num") or 0)])
+    return {"t": session_time, "cars": cars}
+
+
+def roster_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The participants, team ids and player car index as stored on the session."""
+    return {
+        "participants": [
+            {key: p.get(key) for key in PARTICIPANT_KEYS} for p in (meta.get("participants") or [])
+        ],
+        "car_team_ids": list(meta.get("car_team_ids") or []),
+        "player_car_index": meta.get("player_car_index"),
+    }
 
 
 def is_flashback(previous: Dict[str, Any], sample: Dict[str, Any]) -> bool:
@@ -88,9 +173,7 @@ def finalize_lap(
         return f"lap {lap.lap_number}: only {len(samples)} samples"
 
     last = samples[-1]
-    s1 = int(last.get("sector1_ms") or 0)
-    s2 = int(last.get("sector2_ms") or 0)
-    s3 = lap_time_ms - s1 - s2 if s1 > 0 and s2 > 0 else None
+    s1, s2, s3 = split_sectors(lap_time_ms, int(last.get("sector1_ms") or 0), int(last.get("sector2_ms") or 0))
 
     track_length = float(lap.meta.get("track_length") or 0)
     partial_threshold = max(PARTIAL_START_MIN_M, PARTIAL_START_FRACTION * track_length)
@@ -98,9 +181,9 @@ def finalize_lap(
     return FinalizedLap(
         lap_number=lap.lap_number,
         lap_time_ms=lap_time_ms,
-        sector1_ms=s1 or None,
-        sector2_ms=s2 or None,
-        sector3_ms=s3 if s3 and s3 > 0 else None,
+        sector1_ms=s1,
+        sector2_ms=s2,
+        sector3_ms=s3,
         valid=not any(s.get("current_lap_invalid") for s in samples),
         partial_start=float(samples[0].get("lap_distance") or 0) > partial_threshold,
         pit_lap=any((s.get("pit_status") or 0) > 0 for s in samples),
@@ -108,6 +191,8 @@ def finalize_lap(
         samples=list(samples),
         meta=dict(lap.meta),
         wall_offset=wall_offset,
+        session_time_start=float(samples[0].get("session_time") or 0),
+        field_frames=list(lap.field_frames),
     )
 
 
@@ -143,9 +228,11 @@ class LiveRecorder:
         self,
         session_factory,
         persist: Optional[Callable[[FinalizedLap], Awaitable[None]]] = None,
+        persist_grid: Optional[Callable[[Dict[str, Any], List[GridLapResult]], Awaitable[None]]] = None,
     ):
         self._session_factory = session_factory
         self._persist = persist or self._persist_lap
+        self._persist_grid = persist_grid or self._persist_grid_laps
         self._db_lock = asyncio.Lock()
         self._tasks: Set[asyncio.Task] = set()
         # session_uid -> ImportedSession.id
@@ -160,6 +247,12 @@ class LiveRecorder:
         self._discarded = 0
         self._flashbacks = 0
         self._last_discard_reason: Optional[str] = None
+        # The meta of the last player sample: names the session pending grid laps belong to.
+        self._last_meta: Optional[Dict[str, Any]] = None
+        self._last_field_t: Optional[float] = None
+        self._grid: Dict[int, _CarLap] = {}
+        self._pending_grid: List[GridLapResult] = []
+        self._grid_laps = 0
 
     # ----- control -----
 
@@ -170,6 +263,7 @@ class LiveRecorder:
     def stop(self):
         if self._current is not None:
             self._discard("recording stopped")
+        self._flush_grid()
         self._recording = False
 
     def status(self) -> Dict[str, Any]:
@@ -181,6 +275,7 @@ class LiveRecorder:
             "recorded_laps": self._recorded_laps,
             "discarded": self._discarded,
             "flashbacks": self._flashbacks,
+            "grid_laps": self._grid_laps,
             "last_discard_reason": self._last_discard_reason,
         }
 
@@ -196,6 +291,8 @@ class LiveRecorder:
             return
         if self._current is not None:
             self._discard(f"session event {code}")
+        self._flush_grid()
+        self._reset_grid()
         self._session_uid = None
 
     def on_sample(self, sample: Dict[str, Any], meta: Dict[str, Any]):
@@ -209,9 +306,13 @@ class LiveRecorder:
         if self._session_uid is not None and uid != self._session_uid:
             if self._current is not None:
                 self._discard("session_uid changed")
+            self._flush_grid()
+            self._reset_grid()
             self._recorded_laps = 0
             self._flashbacks = 0
+            self._grid_laps = 0
         self._session_uid = uid
+        self._last_meta = dict(meta)
 
         last_lap_ms = int(sample.get("last_lap_time_ms") or 0)
         session_time = float(sample.get("session_time") or 0)
@@ -240,7 +341,59 @@ class LiveRecorder:
             self._flashback(current, float(sample.get("lap_distance") or 0))
         current.samples.append(sample)
 
+    def on_lap_all(self, lap_all: List[Dict[str, Any]], session_time: float):
+        """Every car's LAP_DATA for one packet: a field frame at most 10 Hz, and grid lap completions."""
+        if not self._recording:
+            return
+        self._track_grid(lap_all)
+        last = self._last_field_t
+        if last is not None and 0 <= session_time - last < FIELD_FRAME_INTERVAL_S - 1e-6:
+            return
+        self._last_field_t = session_time
+        if self._current is not None:
+            self._current.field_frames.append(field_frame(lap_all, session_time))
+
     # ----- internals -----
+
+    def _track_grid(self, lap_all: List[Dict[str, Any]]):
+        for index, lap in enumerate(lap_all):
+            lap_num = int(lap.get("current_lap_num") or 0)
+            if lap.get("result_status") in _SKIPPED_RESULT_STATUS or lap_num <= 0:
+                self._grid.pop(index, None)
+                continue
+            car = self._grid.get(index)
+            if car is not None and lap_num == car.lap_number:
+                car.last = lap
+                car.invalid = car.invalid or bool(lap.get("current_lap_invalid"))
+                continue
+            if car is not None and lap_num == car.lap_number + 1:
+                done = complete_grid_lap(index, car, int(lap.get("last_lap_time_ms") or 0))
+                if done is not None:
+                    self._pending_grid.append(done)
+            self._grid[index] = _CarLap(lap_num, lap, bool(lap.get("current_lap_invalid")))
+
+    def _reset_grid(self):
+        self._grid = {}
+        self._last_field_t = None
+
+    def _take_pending_grid(self) -> List[GridLapResult]:
+        pending, self._pending_grid = self._pending_grid, []
+        return pending
+
+    def _flush_grid(self):
+        """Persist pending grid laps on their own (recording or session ending)."""
+        pending = self._take_pending_grid()
+        if not pending:
+            return
+        if self._last_meta is None:
+            logger.info(f"Live recorder dropped {len(pending)} grid laps: no session seen")
+            return
+        self._schedule(self._persist_grid_safely(dict(self._last_meta), pending))
+
+    def _schedule(self, coro: Awaitable[None]):
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def _flashback(self, lap: _LapInProgress, lap_distance: float):
         kept = rewind_samples(lap.samples, lap_distance)
@@ -266,16 +419,48 @@ class LiveRecorder:
             self._last_discard_reason = result
             logger.info(f"Live recorder dropped {result}")
             return
-        task = asyncio.create_task(self._persist_safely(result))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        result.grid_laps.extend(self._take_pending_grid())
+        self._schedule(self._persist_safely(result))
 
     async def _persist_safely(self, lap: FinalizedLap):
         try:
             await self._persist(lap)
             self._recorded_laps += 1
+            self._grid_laps += len(lap.grid_laps)
         except Exception:
             logger.exception(f"Live recorder failed to save lap {lap.lap_number}")
+
+    async def _persist_grid_safely(self, meta: Dict[str, Any], grid_laps: List[GridLapResult]):
+        try:
+            await self._persist_grid(meta, grid_laps)
+            self._grid_laps += len(grid_laps)
+        except Exception:
+            logger.exception(f"Live recorder failed to save {len(grid_laps)} grid laps")
+
+    async def _persist_grid_laps(self, meta: Dict[str, Any], grid_laps: List[GridLapResult]):
+        async with self._db_lock:
+            async with self._session_factory() as db:
+                session_row = await self._get_or_create_session(db, meta)
+                await self._insert_grid_laps(db, session_row.id, grid_laps)
+                await db.commit()
+                logger.info(f"Live recorder saved {len(grid_laps)} grid laps to session {session_row.id}")
+
+    @staticmethod
+    async def _insert_grid_laps(db, session_id: uuid.UUID, grid_laps: List[GridLapResult]):
+        if not grid_laps:
+            return
+        await db.execute(insert(GridLap), [
+            {"id": uuid.uuid4(), "session_id": session_id, **g.__dict__} for g in grid_laps
+        ])
+
+    @staticmethod
+    def _sync_roster(session_row: ImportedSession, meta: Dict[str, Any]):
+        """Write who is in the session onto its extra_data when first seen or changed."""
+        extra = session_row.extra_data or {}
+        roster = roster_from_meta(meta)
+        if all(extra.get(key) == roster[key] for key in ROSTER_KEYS):
+            return
+        session_row.extra_data = {**extra, **roster}
 
     async def _persist_lap(self, lap: FinalizedLap):
         async with self._db_lock:
@@ -303,11 +488,19 @@ class LiveRecorder:
                         "partial_start": lap.partial_start,
                         "pit_lap": lap.pit_lap,
                         "flashbacks": lap.flashbacks,
+                        "session_time_start": lap.session_time_start,
                         "source": "live",
                     },
                     resampled_data=resample_lap(sample_dicts),
                 )
                 db.add(lap_row)
+                if lap.field_frames:
+                    db.add(SessionField(
+                        id=uuid.uuid4(), session_id=session_row.id,
+                        lap_number=lap.lap_number, frames=lap.field_frames,
+                    ))
+                await self._insert_grid_laps(db, session_row.id, lap.grid_laps)
+                self._sync_roster(session_row, lap.meta)
 
                 # One multi-row INSERT per chunk instead of ten thousand ORM
                 # objects: a lap lands in well under a second and the database
@@ -354,7 +547,8 @@ class LiveRecorder:
                 await db.commit()
                 logger.info(
                     f"Live recorder saved lap {lap.lap_number} ({lap.lap_time_ms} ms, "
-                    f"{len(sample_dicts)} samples) to session {session_row.id}"
+                    f"{len(sample_dicts)} samples, {len(lap.field_frames)} field frames, "
+                    f"{len(lap.grid_laps)} grid laps) to session {session_row.id}"
                 )
 
     async def _get_or_create_session(self, db, meta: Dict[str, Any]) -> ImportedSession:

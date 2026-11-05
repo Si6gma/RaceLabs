@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Download, Play, Trash2, Upload } from 'lucide-react';
-import { useReplay } from '@/stores/replayStore';
+import { useReplay, type ReplayField, type GridLap } from '@/stores/replayStore';
+import DriverTag from '@/components/DriverTag';
 import { useSettings } from '@/stores/settingsStore';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import type { ImportedLap, ImportedSession } from '@/types/telemetry';
@@ -124,6 +125,8 @@ export default function Recorded() {
   });
   const [session, setSession] = useState<(ImportedSession & { laps: ImportedLap[] }) | null>(null);
   const [laps, setLaps] = useState<LoadedLap[]>([]);
+  const [field, setField] = useState<ReplayField | null>(null);
+  const [grid, setGrid] = useState<GridLap[]>([]);
   const [loadingLaps, setLoadingLaps] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -174,7 +177,9 @@ export default function Recorded() {
 
   // ── Selected session and its laps ───────────────────────────────────────────
   useEffect(() => {
-    if (!sessionId) { setSession(null); setLaps([]); setSelected([]); return; }
+    if (!sessionId) { setSession(null); setLaps([]); setSelected([]); setField(null); setGrid([]); return; }
+    setField(null);
+    setGrid([]);
     let cancelled = false;
     const load = async () => {
       setLoadingLaps(true);
@@ -182,6 +187,14 @@ export default function Recorded() {
         const res = await fetch(`${API_URL}/api/import/sessions/${sessionId}`);
         if (!res.ok) { if (!cancelled) setSession(null); return; }
         const data = await res.json() as ImportedSession & { laps: ImportedLap[] };
+        // The rest of the grid, when the session was recorded live
+        fetch(`${API_URL}/api/import/sessions/${sessionId}/field`).then(r => (r.ok ? r.json() : null)).then(f => {
+          if (cancelled || !f) return;
+          setField({ playerCarIndex: f.player_car_index ?? null, participants: f.participants ?? [], carTeamIds: f.car_team_ids ?? [], laps: f.laps ?? [] });
+        }).catch(() => {});
+        fetch(`${API_URL}/api/import/sessions/${sessionId}/grid`).then(r => (r.ok ? r.json() : null)).then(g => {
+          if (!cancelled && g) setGrid(g.laps ?? []);
+        }).catch(() => {});
         const loaded = await Promise.all(data.laps.map(async (meta): Promise<LoadedLap> => {
           const r = await fetch(`${API_URL}/api/import/laps/${meta.id}/resampled`);
           if (r.ok) return { meta, samples: (await r.json()).samples as TelemetryPoint[] };
@@ -398,6 +411,7 @@ export default function Recorded() {
       {
         id: session.id, name: session.name, trackId: session.track_id != null ? Number(session.track_id) : undefined,
         trackLength: session.track_length ?? 0, sessionType: session.session_type,
+        field: field ?? undefined, grid,
       },
       laps
         .filter(l => (l.meta.lap_time_ms ?? 0) > 0 && l.samples.length > 1)
@@ -407,6 +421,7 @@ export default function Recorded() {
           sectorsMs: [l.meta.sector1_ms ?? null, l.meta.sector2_ms ?? null, l.meta.sector3_ms ?? null],
           nickname: l.meta.nickname ?? null,
           samples: l.samples,
+          sessionTimeStart: typeof l.meta.extra_data?.session_time_start === 'number' ? l.meta.extra_data.session_time_start : null,
         })),
       replaySpeed,
     );
@@ -821,6 +836,46 @@ export default function Recorded() {
               </table>
             </div>
           )}
+
+          {/* Results: every car's best lap in this session, when the grid was recorded */}
+          {grid.length > 0 && field && (() => {
+            const byCar = new Map<number, { best: GridLap | null; count: number }>();
+            for (const g of grid) {
+              const row = byCar.get(g.car_index) ?? { best: null, count: 0 };
+              row.count++;
+              if (g.valid && g.lap_time_ms > 0 && (!row.best || g.lap_time_ms < row.best.lap_time_ms)) row.best = g;
+              byCar.set(g.car_index, row);
+            }
+            const rows = [...byCar.entries()]
+              .map(([carIndex, r]) => ({ carIndex, ...r, who: field.participants.find(p => p.index === carIndex) }))
+              .sort((a, b) => (a.best?.lap_time_ms ?? Infinity) - (b.best?.lap_time_ms ?? Infinity));
+            const fastest = rows[0]?.best?.lap_time_ms ?? null;
+            return (
+              <div className="px-3 py-3 flex flex-col gap-2">
+                <div className="flex items-baseline justify-between">
+                  <span className="eng-label">Results</span>
+                  <span className="text-[12px] text-motorsport-muted font-semibold">best lap per driver</span>
+                </div>
+                <table className="w-full border-collapse">
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={r.carIndex} className="border-t border-motorsport-border/50">
+                        <td className="font-telemetry text-[12px] tabular-nums text-motorsport-muted py-[3px] w-6">{i + 1}</td>
+                        <td className="py-[3px] w-10"><DriverTag name={r.who?.name ?? `Car ${r.carIndex + 1}`} teamId={r.who?.team_id} size="sm" /></td>
+                        <td className={`text-[13px] font-bold tracking-wide py-[3px] truncate ${r.carIndex === field.playerCarIndex ? 'text-motorsport-orange' : 'text-motorsport-text'}`}>
+                          {r.who?.name ?? `Car ${r.carIndex + 1}`}
+                        </td>
+                        <td className="text-right font-telemetry text-[13px] tabular-nums py-[3px]" style={{ color: r.best && r.best.lap_time_ms === fastest ? PURPLE : '#E8EEF4' }}>
+                          {r.best ? formatTime(r.best.lap_time_ms) : '--:--.---'}
+                        </td>
+                        <td className="text-right font-telemetry text-[12px] tabular-nums text-motorsport-muted py-[3px] w-8">{r.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
 
           {/* Corners on the reference lap: minimum speed and braking point per lap */}
           {analysis && analysis.corners.length > 0 && (

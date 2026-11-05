@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, JSON, ForeignKey, Text, BigInteger
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
 import uuid
@@ -160,6 +160,32 @@ class TelemetrySample(Base):
     lap = relationship("ImportedLap", back_populates="samples")
 
 
+class SessionField(Base):
+    """Where the whole field was during one of the player's recorded laps: a list of
+    {"t": session_time, "cars": [[lap_distance, car_position, current_lap_num] x 22]} at up to 10 Hz."""
+    __tablename__ = "session_fields"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("imported_sessions.id"), nullable=False)
+    lap_number = Column(Integer, nullable=False)
+    frames = Column(JSONB)
+
+
+class GridLap(Base):
+    """A lap completed by any car in a live-recorded session."""
+    __tablename__ = "grid_laps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("imported_sessions.id"), nullable=False)
+    car_index = Column(Integer, nullable=False)
+    lap_number = Column(Integer, nullable=False)
+    lap_time_ms = Column(Integer, nullable=False)
+    sector1_ms = Column(Integer)
+    sector2_ms = Column(Integer)
+    sector3_ms = Column(Integer)
+    valid = Column(Boolean, default=True)
+
+
 class TrackAlias(Base):
     """A user-chosen nickname for a track, keyed by the track_id string used on sessions."""
     __tablename__ = "track_aliases"
@@ -177,4 +203,6 @@ class TrackSectors(Base):
     sector2_m = Column(Float)
     # Learned DRS zones as a list of {"start": m, "end": m | null}.
     drs_zones = Column(JSON)
+    # Which learner wrote drs_zones; older versions are purged at startup.
+    drs_zones_version = Column(Integer)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

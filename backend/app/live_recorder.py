@@ -208,6 +208,19 @@ def finalize_lap(
 
 # A ghost clock step longer than this is not one packet interval (a pause, a restart).
 GHOST_STEP_MAX_S = 0.25
+# A ghost this close to the track's end that drops back to the line has finished its lap.
+GHOST_END_M = 50.0
+
+
+def ghost_wrapped(lap: _LapInProgress, distance: float, meta: Dict[str, Any]) -> bool:
+    """True when the ghost just crossed the line: F1 23 ghosts stop counting laps at 2,
+    so the distance wrapping from the end of the track is the only completion signal.
+    A drop from anywhere earlier is a restart, which is a rewind."""
+    if not lap.samples:
+        return False
+    track_length = float(meta.get("track_length") or 0)
+    previous = float(lap.samples[-1].get("lap_distance") or 0)
+    return track_length > 0 and previous >= track_length - GHOST_END_M and distance < previous - GHOST_END_M
 
 
 def ghost_sample(sample: Dict[str, Any], previous: Optional[Dict[str, Any]], rewound: bool) -> Dict[str, Any]:
@@ -410,9 +423,10 @@ class LiveRecorder:
             return
         distance = float(sample.get("lap_distance") or 0)
         current = self._ghosts.get(index)
+        if current is not None and (lap_num == current.lap_number + 1 or ghost_wrapped(current, distance, meta)):
+            self._finish_ghost(index, current, int(sample.get("last_lap_time_ms") or 0), float(sample.get("session_time") or 0))
+            current = None
         if current is None or lap_num != current.lap_number:
-            if current is not None and lap_num == current.lap_number + 1:
-                self._finish_ghost(index, current, int(sample.get("last_lap_time_ms") or 0), float(sample.get("session_time") or 0))
             current = _LapInProgress(lap_num, dict(meta))
             self._ghosts[index] = current
         elif current.samples and distance == float(current.samples[-1].get("lap_distance") or 0):

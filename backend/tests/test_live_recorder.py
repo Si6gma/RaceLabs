@@ -519,6 +519,21 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         await self.rec.drain()
         self.assertEqual([lap.lap_time_ms for lap in self.saved], [83873, 84000])
 
+    async def test_ghost_lap_completes_on_the_distance_wrap_when_its_counter_is_stuck(self):
+        # F1 23 ghosts stop counting at lap 2: the lap ends when the distance wraps to the line.
+        self.drive_ghost(3, 2, count=51, lap_time_ms=83873)   # reaches 5000 m, the track length
+        self.drive_ghost(3, 2, count=51, lap_time_ms=83873)
+        self.drive_ghost(3, 2, count=51, lap_time_ms=83873)
+        await self.rec.drain()
+        self.assertEqual([(lap.lap_number, lap.lap_time_ms, lap.ghost["car_index"]) for lap in self.saved], [(2, 83873, 3)])
+        self.assertEqual(len(self.saved[0].samples), 51)
+
+    async def test_restart_from_mid_lap_is_a_rewind_not_a_completion(self):
+        self.drive_ghost(3, 2, count=30, lap_time_ms=83873)   # 2900 m, then back to the line
+        self.drive_ghost(3, 2, count=51, lap_time_ms=83873)
+        await self.rec.drain()
+        self.assertEqual(self.saved, [])
+
     async def test_ghosts_outside_time_trial_are_ignored(self):
         self.drive_ghost(3, 1, meta=META)
         self.drive_ghost(3, 2, lap_time_ms=83873, meta=META)

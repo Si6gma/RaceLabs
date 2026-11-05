@@ -1,7 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { useEffect, useState, useMemo, memo } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
-import LightsControl from '@/components/LightsControl';
 import DriverTag from '@/components/DriverTag';
 import { apiFetch } from '@/utils/api';
 import { formatTime } from '@/utils/formatters';
@@ -151,7 +150,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="h-screen flex flex-col bg-motorsport-black overflow-hidden">
-      <header className="h-12 bg-motorsport-charcoal border-b border-motorsport-border flex items-center px-4 gap-6 shrink-0">
+      <header className="h-12 bg-motorsport-charcoal border-b border-motorsport-border grid grid-cols-[1fr_auto_1fr] items-center px-4 shrink-0">
+        <div className="flex items-center gap-6 min-w-0">
         {/* Wordmark: the mark plus the name, and a way home */}
         <NavLink to="/" className="flex items-center gap-2 shrink-0 group" title="Live">
           <img src="/logo.svg" alt="" className="w-6 h-6" />
@@ -181,21 +181,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
 
-        {/* Where we are, and what race control is showing */}
-        <div className="flex-1 flex items-center justify-center gap-2 min-w-0">
-          <SessionStatusBoxMemo track={session?.track} sessionType={session?.session_type} />
-          <RaceControlBoxMemo />
-          <SessionBestBoxMemo />
+        {/* Where we are, left with the tabs */}
+        <SessionStatusBoxMemo track={session?.track} sessionType={session?.session_type} />
         </div>
 
-        {/* Controls: one bordered group, every segment the same height */}
+        {/* What race control is showing, dead centre */}
+        <RaceControlBoxMemo />
+
+        {/* Right: the session's fastest lap, then the recording switch */}
+        <div className="flex items-center justify-end gap-2 min-w-0">
+        <SessionBestBoxMemo />
         <div className="flex items-center h-8 border border-motorsport-border shrink-0">
           {replayMode && (
             <span className="flex items-center px-3 h-full text-[12px] font-bold tracking-wide uppercase text-motorsport-purple border-r border-motorsport-border">
               Replay
             </span>
           )}
-          <LightsControl />
           <button
             onClick={toggleRecording}
             title={recording ? 'Stop recording laps' : 'Record completed laps'}
@@ -211,6 +212,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               </span>
             )}
           </button>
+        </div>
         </div>
       </header>
 

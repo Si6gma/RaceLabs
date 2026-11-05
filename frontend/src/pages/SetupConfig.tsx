@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiFetch, getControlKey, setControlKey } from '@/utils/api';
 import { useSettings } from '@/stores/settingsStore';
+import LightsControl from '@/components/LightsControl';
 
 // Settings that live on this browser or on the server. Nothing here is decoration:
 // the control key decides who may press buttons, the rest changes how numbers read.
@@ -63,6 +64,16 @@ export default function SetupConfig() {
           <span className="text-[13px] font-semibold h-[13px] leading-none" style={{ color: keyState === 'ok' ? '#00E85A' : keyState === 'rejected' ? '#FF2044' : 'transparent' }}>
             {keyState === 'ok' ? 'Key accepted' : keyState === 'rejected' ? 'Key rejected by the server' : '.'}
           </span>
+        </div>
+
+        <div className="telemetry-panel p-4 flex flex-col gap-3">
+          <span className="text-[16px] font-bold tracking-wide text-motorsport-text">Room lights</span>
+          <p className="text-[13px] text-motorsport-muted leading-relaxed">
+            The lamps follow the race: lights out, flags, safety car. Brightness scales every effect; Test cycles the phases.
+          </p>
+          <div className="flex items-center h-8 border border-motorsport-border self-start">
+            <LightsControl />
+          </div>
         </div>
 
         <div className="telemetry-panel p-4 flex flex-col gap-3">

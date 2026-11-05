@@ -39,9 +39,10 @@ function GapRow({ label, gap, name, behind }: { label: string; gap: Gap | null; 
         <span className="eng-label">{label}</span>
         <span className="text-[14px] font-semibold tracking-wide text-motorsport-text truncate">{gap ? name : '—'}</span>
       </div>
+      {/* The car ahead is time to make up (red, minus); the car behind is cushion (green, plus). */}
       <span
         className="font-telemetry text-[28px] font-bold tabular-nums leading-none"
-        style={{ color: trend == null ? '#E8EEF4' : trend.good ? GOOD : BAD }}
+        style={{ color: gap ? (behind ? GOOD : BAD) : '#5F7183' }}
       >
         {gap ? `${behind ? '+' : '−'}${(gap.gapMs / 1000).toFixed(3)}s` : '--.---'}
       </span>

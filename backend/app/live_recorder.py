@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 
 from app.models import ImportedLap, ImportedSession, TelemetrySample
 from app.resampler import resample_lap
@@ -309,39 +309,40 @@ class LiveRecorder:
                 )
                 db.add(lap_row)
 
-                pending = 0
-                for index, (raw, s) in enumerate(zip(lap.samples, sample_dicts)):
-                    db.add(TelemetrySample(
-                        id=uuid.uuid4(),
-                        session_id=session_row.id,
-                        lap_id=lap_row.id,
-                        bin_index=index,
-                        normalized_track_position=s["normalized_track_position"],
-                        cumulative_distance=s["cumulative_distance"],
-                        world_position_x=s["world_position_x"],
-                        world_position_y=s["world_position_y"],
-                        world_position_z=s["world_position_z"],
-                        speed=s["speed_kmh"] / 3.6,
-                        speed_kmh=s["speed_kmh"],
-                        gforce_lat=s["gforce_lat"],
-                        gforce_lon=float(raw.get("g_force_lon") or 0),
-                        gforce_vert=float(raw.get("g_force_vert") or 0),
-                        throttle=s["throttle"],
-                        brake=s["brake"],
-                        steering=s["steering"],
-                        gear=s["gear"],
-                        rpm=s["rpm"],
-                        race_position=int(raw.get("car_position") or 0),
-                        lap_time=s["lap_time"],
-                        sector=int(raw.get("sector") or 0),
-                        timestamp=datetime.utcfromtimestamp(
-                            lap.wall_offset + float(raw.get("session_time") or 0)
-                        ),
-                    ))
-                    pending += 1
-                    if pending >= SAMPLE_FLUSH_THRESHOLD:
-                        await db.flush()
-                        pending = 0
+                # One multi-row INSERT per chunk instead of ten thousand ORM
+                # objects: a lap lands in well under a second and the database
+                # is not busy while the next lap is being driven.
+                await db.flush()
+                rows = [
+                    {
+                        "id": uuid.uuid4(),
+                        "session_id": session_row.id,
+                        "lap_id": lap_row.id,
+                        "bin_index": index,
+                        "normalized_track_position": s["normalized_track_position"],
+                        "cumulative_distance": s["cumulative_distance"],
+                        "world_position_x": s["world_position_x"],
+                        "world_position_y": s["world_position_y"],
+                        "world_position_z": s["world_position_z"],
+                        "speed": s["speed_kmh"] / 3.6,
+                        "speed_kmh": s["speed_kmh"],
+                        "gforce_lat": s["gforce_lat"],
+                        "gforce_lon": float(raw.get("g_force_lon") or 0),
+                        "gforce_vert": float(raw.get("g_force_vert") or 0),
+                        "throttle": s["throttle"],
+                        "brake": s["brake"],
+                        "steering": s["steering"],
+                        "gear": s["gear"],
+                        "rpm": s["rpm"],
+                        "race_position": int(raw.get("car_position") or 0),
+                        "lap_time": s["lap_time"],
+                        "sector": int(raw.get("sector") or 0),
+                        "timestamp": datetime.utcfromtimestamp(lap.wall_offset + float(raw.get("session_time") or 0)),
+                    }
+                    for index, (raw, s) in enumerate(zip(lap.samples, sample_dicts))
+                ]
+                for start in range(0, len(rows), SAMPLE_FLUSH_THRESHOLD):
+                    await db.execute(insert(TelemetrySample), rows[start:start + SAMPLE_FLUSH_THRESHOLD])
 
                 session_row.lap_count = (session_row.lap_count or 0) + 1
                 session_row.sample_count = (session_row.sample_count or 0) + len(sample_dicts)

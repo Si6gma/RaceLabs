@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Lock } from 'lucide-react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { TEAM_NAMES } from '@/utils/teams';
@@ -12,9 +13,24 @@ function CarSelector() {
   const selectedCarIndex = useTelemetryStore(s => s.selectedCarIndex);
   const playerCarIndex   = useTelemetryStore(s => s.currentFrame?.player_car_index);
   const setSelectedCarIndex = useTelemetryStore(s => s.setSelectedCarIndex);
+  const lapAll = useTelemetryStore(s => s.currentFrame?.lap_all);
   const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; left: number; width: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const hideAi = useSettings(s => s.hideAiDrivers);
+
+  // The list is portalled to the body, so it is never clipped by the panel
+  // it sits in. It is pinned under the button and bounded by the viewport.
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = rootRef.current?.getBoundingClientRect();
+      if (r) setAnchor({ top: r.bottom, left: r.left, width: r.width });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open]);
 
   // If the watched car leaves the session, fall back to the player's own car.
   useEffect(() => {
@@ -58,6 +74,12 @@ function CarSelector() {
     setOpen(false);
   };
 
+  // Running order: by the game's car_position, unknowns at the bottom.
+  const positionOf = (index: number) => lapAll?.[index]?.car_position || 99;
+  const listed = participants
+    .filter(p => !hideAi || !p.ai_controlled || p.index === selectedCarIndex)
+    .sort((a, b) => positionOf(a.index) - positionOf(b.index));
+
   return (
     <div ref={rootRef} className="relative shrink-0 border-b border-motorsport-border">
       <button
@@ -81,39 +103,43 @@ function CarSelector() {
         </span>
       </button>
 
-      {open && (
+      {open && anchor && createPortal(
         <ul
           role="listbox"
-          className="absolute left-0 right-0 top-full z-20 max-h-[420px] overflow-y-auto bg-motorsport-panel border border-motorsport-border-strong shadow-panel-lg"
+          className="fixed z-50 overflow-y-auto bg-motorsport-panel border border-motorsport-border-strong shadow-panel-lg"
+          style={{ top: anchor.top, left: anchor.left, width: anchor.width, maxHeight: `calc(100vh - ${anchor.top + 16}px)` }}
+          onMouseDown={e => e.stopPropagation()}
         >
           <Option
             selected={!spectating}
             name="My car"
+            position={playerCarIndex !== undefined ? positionOf(playerCarIndex) : undefined}
             detail={playerCarIndex !== undefined ? `slot ${playerCarIndex + 1}` : ''}
             onPick={() => choose(null)}
           />
-          {participants.filter(p => !hideAi || !p.ai_controlled || p.index === selectedCarIndex).map(p => (
+          {listed.map(p => (
             <Option
               key={p.index}
               selected={selectedCarIndex === p.index}
               name={p.name}
               teamId={p.team_id}
-              number={p.race_number}
-              detail={[TEAM_NAMES[p.team_id], p.ai_controlled ? 'AI' : null].filter(Boolean).join(' · ')}
+              position={positionOf(p.index)}
+              detail={[`#${p.race_number}`, TEAM_NAMES[p.team_id], p.ai_controlled ? 'AI' : null].filter(Boolean).join(' · ')}
               locked={!p.telemetry_public}
               onPick={() => choose(p.index)}
             />
           ))}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );
 }
 
 function Option({
-  selected, name, teamId, number, detail, locked, onPick,
+  selected, name, teamId, position, detail, locked, onPick,
 }: {
-  selected: boolean; name: string; teamId?: number; number?: number; detail: string; locked?: boolean; onPick: () => void;
+  selected: boolean; name: string; teamId?: number; position?: number; detail: string; locked?: boolean; onPick: () => void;
 }) {
   return (
     <li
@@ -127,8 +153,8 @@ function Option({
       {teamId !== undefined
         ? <DriverTag name={name} teamId={teamId} size="sm" />
         : <span className="w-[38px] shrink-0" />}
-      <span className="font-telemetry text-[12px] tabular-nums text-motorsport-muted w-7 shrink-0">
-        {number !== undefined ? `#${number}` : ''}
+      <span className="font-telemetry text-[13px] font-semibold tabular-nums text-motorsport-text w-8 shrink-0">
+        {position !== undefined && position < 99 ? `P${position}` : ''}
       </span>
       <span className="text-[14px] font-bold tracking-wide truncate text-motorsport-text">
         {name}

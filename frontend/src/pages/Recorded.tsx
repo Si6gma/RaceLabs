@@ -378,11 +378,16 @@ export default function Recorded() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLaps, selectionKey]);
 
-  const graphLaps = selectedLaps.map((l, i) => {
-    const delta = analysis?.perLap[i]?.delta;
-    const data = delta ? l.samples.map((s, k) => ({ ...s, delta_time: delta[k] })) : l.samples.map(s => ({ ...s, delta_time: 0 }));
-    return { data, color: colourOf(l.meta.id) };
-  });
+  // Built once per selection, never per hover: the canvases compare these by
+  // identity to decide whether the data layer needs redrawing.
+  const graphLaps = useMemo(
+    () => selectedLaps.map((l, i) => {
+      const delta = analysis?.perLap[i]?.delta;
+      const data = delta ? l.samples.map((s, k) => ({ ...s, delta_time: delta[k] })) : l.samples.map(s => ({ ...s, delta_time: 0 }));
+      return { data, color: LAP_COLORS[i] ?? '#9AACBE' };
+    }),
+    [selectedLaps, analysis],
+  );
   const tooltipLap = selectedLaps[0];
   const tooltipSample = tooltipLap ? sampleAt(tooltipLap, effectivePosition) : null;
 

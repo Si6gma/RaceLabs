@@ -14,7 +14,9 @@ interface LightsState {
 // Every control is always laid out so toggling never shifts the header.
 export default function LightsControl() {
   const [state, setState] = useState<LightsState | null>(null);
+  const [denied, setDenied] = useState(false);
   const timer = useRef<number>();
+  const deniedTimer = useRef<number>();
 
   const refresh = () => fetch('/api/lights').then(r => r.json()).then(setState).catch(() => {});
 
@@ -30,12 +32,21 @@ export default function LightsControl() {
 
   if (!state?.configured) return null;
 
+  // A refused write (no control key) must not be mistaken for a new state:
+  // put the real state back and say why for a moment.
+  const refused = () => {
+    setDenied(true);
+    window.clearTimeout(deniedTimer.current);
+    deniedTimer.current = window.setTimeout(() => setDenied(false), 2500);
+    refresh();
+  };
+
   const post = (patch: Partial<LightsState>) =>
     apiFetch('/api/lights', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
-    }).then(r => r.json()).then(setState).catch(() => {});
+    }).then(r => (r.ok ? r.json().then(setState) : refused())).catch(() => {});
 
   const toggle = () => {
     const enabled = !state.enabled;
@@ -51,7 +62,7 @@ export default function LightsControl() {
 
   const test = () => {
     setState({ ...state, testing: true });
-    apiFetch('/api/lights/test', { method: 'POST' }).then(refresh).catch(() => {});
+    apiFetch('/api/lights/test', { method: 'POST' }).then(r => (r.ok ? refresh() : refused())).catch(() => {});
   };
 
   const off = !state.enabled;
@@ -68,7 +79,7 @@ export default function LightsControl() {
         }`}
       >
         <Lightbulb className="w-3.5 h-3.5" />
-        Lights
+        {denied ? <span className="text-motorsport-red">Key needed</span> : 'Lights'}
       </button>
       <label
         className={`flex items-center gap-2 px-3 h-full border-l border-motorsport-border transition-opacity ${off ? 'opacity-40' : ''}`}

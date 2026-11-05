@@ -112,11 +112,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     fetch('/api/recording/status').then(r => r.json()).then(d => setRecording(d.recording)).catch(() => {});
   }, [setRecording]);
 
+  const [recDenied, setRecDenied] = useState(false);
+
   async function toggleRecording() {
     const endpoint = recording ? '/api/recording/stop' : '/api/recording/start';
     try {
       const res  = await apiFetch(endpoint, { method: 'POST' });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setRecDenied(true);
+        setTimeout(() => setRecDenied(false), 2500);
+        return;
+      }
       const data = await res.json();
       setRecording(data.recording);
     } catch {}
@@ -178,7 +184,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             }`}
           >
             <span className={`w-2 h-2 rounded-full ${recording ? 'bg-motorsport-red animate-pulse' : 'bg-motorsport-dim'}`} />
-            Rec
+            {recDenied ? <span className="text-motorsport-red">Key needed</span> : 'Rec'}
             {recordedLaps > 0 && (
               <span className="font-telemetry tabular-nums normal-case" title="Completed laps recorded this session">
                 {recordedLaps} {recordedLaps === 1 ? 'lap' : 'laps'}

@@ -2,7 +2,9 @@ import { NavLink } from 'react-router-dom';
 import { useEffect, useState, useMemo, memo } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import LightsControl from '@/components/LightsControl';
+import DriverTag from '@/components/DriverTag';
 import { apiFetch } from '@/utils/api';
+import { formatTime } from '@/utils/formatters';
 
 const NAV = [
   { path: '/',         label: 'Live'     },
@@ -97,8 +99,25 @@ function RaceControlBox() {
   );
 }
 
+// Fastest lap of the session and who set it, in purple like every best.
+function SessionBestBox() {
+  const best = useTelemetryStore(s => s.sessionBest);
+  const participants = useTelemetryStore(s => s.participants);
+  const playerIndex = useTelemetryStore(s => s.currentFrame?.player_car_index);
+  if (!best) return null;
+  const who = participants.find(p => p.index === best.carIndex);
+  const name = who?.name ?? (best.carIndex === playerIndex ? 'You' : `Car ${best.carIndex + 1}`);
+  return (
+    <StatusBox border="#B388FF" color="#B388FF" dashed={false}>
+      <DriverTag name={name} teamId={who?.team_id} size="sm" />
+      <span className="font-telemetry text-[15px] font-bold tabular-nums leading-none">{formatTime(best.ms)}</span>
+    </StatusBox>
+  );
+}
+
 const SessionStatusBoxMemo = memo(SessionStatusBox);
 const RaceControlBoxMemo = memo(RaceControlBox);
+const SessionBestBoxMemo = memo(SessionBestBox);
 
 // ── Layout ───────────────────────────────────────────────────────────────────
 
@@ -166,6 +185,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="flex-1 flex items-center justify-center gap-2 min-w-0">
           <SessionStatusBoxMemo track={session?.track} sessionType={session?.session_type} />
           <RaceControlBoxMemo />
+          <SessionBestBoxMemo />
         </div>
 
         {/* Controls: one bordered group, every segment the same height */}

@@ -1,4 +1,4 @@
-import { memo, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { useTelemetryStore } from '@/stores/telemetryStore';
 import { formatTime } from '@/utils/formatters';
 import { GapTracker, RACE_SESSION_TYPES, type Gap } from '@/utils/raceGaps';
@@ -72,6 +72,14 @@ function TimingTower() {
   if (lapAll) sectors.current.tracker.update(lapAll);
   const sectorTimes = sectors.current.tracker.latestFor(viewedIdx);
   const lastLap = sectors.current.tracker.lastLapFor(viewedIdx);
+
+  // Share the session's fastest lap with the header once it changes
+  const sessionBest = sectors.current.tracker.fastestLap();
+  const setSessionBest = useTelemetryStore(s => s.setSessionBest);
+  const storedBest = useTelemetryStore(s => s.sessionBest);
+  useEffect(() => {
+    if (sessionBest?.ms !== storedBest?.ms || sessionBest?.carIndex !== storedBest?.carIndex) setSessionBest(sessionBest);
+  }, [sessionBest, storedBest, setSessionBest]);
   const nameOf = (idx: number) => participants.find(p => p.index === idx)?.name ?? `Car ${idx + 1}`;
   const teamOf = (idx: number) => participants.find(p => p.index === idx)?.team_id;
 
@@ -177,16 +185,13 @@ function TimingTower() {
         </div>
 
         {/* The lap just completed, coloured like a sector: purple session
-            best, green personal best, yellow otherwise. Session best beneath. */}
-        <div className="px-3 py-3 flex-1 min-h-[56px] flex flex-col items-center justify-center gap-1.5">
+            best, green personal best, yellow otherwise. */}
+        <div className="px-3 py-3 flex-1 min-h-[56px] flex items-center justify-center">
           <span
             className="font-telemetry text-[28px] font-bold tabular-nums leading-none"
             style={{ color: lastLap ? SECTOR_COLOURS[lastLap.colour] : '#5F7183' }}
           >
             {lastLap ? formatTime(lastLap.ms) : '--:--.---'}
-          </span>
-          <span className="font-telemetry text-[12px] tabular-nums leading-none text-motorsport-muted">
-            {bestMs ? `best ${formatTime(bestMs)}` : ''}
           </span>
         </div>
       </div>

@@ -53,6 +53,8 @@ interface TelemetryState {
   recording:  boolean;
 
   importModalOpen: boolean;
+  // Fastest lap of anyone this session, for the header.
+  sessionBest: { ms: number; carIndex: number } | null;
 
   // Actions
   setCurrentFrame:           (frame: TelemetryFrame) => void;
@@ -67,6 +69,7 @@ interface TelemetryState {
   addImportedSession:        (session: ImportedSession) => void;
   removeImportedSession:     (id: string) => void;
   setImportModalOpen:        (open: boolean) => void;
+  setSessionBest:            (best: { ms: number; carIndex: number } | null) => void;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -83,6 +86,7 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   replayMode:              false,
   recording:               false,
   importModalOpen:         false,
+  sessionBest:             null,
 
   setCurrentFrame: (frame) => {
     const { currentFrame: prev, selectedCarIndex, participants } = get();
@@ -148,4 +152,5 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => ({
   addImportedSession:         (session)  => set({ importedSessions: [session, ...get().importedSessions] }),
   removeImportedSession:      (id)       => set({ importedSessions: get().importedSessions.filter(s => s.id !== id) }),
   setImportModalOpen:         (open)     => set({ importModalOpen: open }),
+  setSessionBest:             (best)     => set({ sessionBest: best }),
 }));

@@ -31,6 +31,7 @@ export class SectorTracker {
   private latest = new Map<number, Array<SectorTime | null>>();
   private bestLap = new Map<number, number>();
   private sessionBestLap: number | null = null;
+  private sessionBestCar: number | null = null;
   private lastLap = new Map<number, { ms: number; colour: SectorColour }>();
   // Every completed lap's time per car, by lap number, so two cars can be
   // compared on the same lap once both have finished it.
@@ -83,7 +84,7 @@ export class SectorTracker {
             const lapColour: SectorColour =
               this.sessionBestLap == null || lapMs < this.sessionBestLap ? 'purple'
               : mine == null || lapMs < mine ? 'green' : 'yellow';
-            if (this.sessionBestLap == null || lapMs < this.sessionBestLap) this.sessionBestLap = lapMs;
+            if (this.sessionBestLap == null || lapMs < this.sessionBestLap) { this.sessionBestLap = lapMs; this.sessionBestCar = idx; }
             if (mine == null || lapMs < mine) this.bestLap.set(idx, lapMs);
             this.lastLap.set(idx, { ms: lapMs, colour: lapColour });
           }
@@ -109,6 +110,13 @@ export class SectorTracker {
 
   bestLapFor(carIdx: number): number | null {
     return this.bestLap.get(carIdx) ?? null;
+  }
+
+  // Fastest clean lap by anyone this session, and who drove it.
+  fastestLap(): { ms: number; carIndex: number } | null {
+    return this.sessionBestLap != null && this.sessionBestCar != null
+      ? { ms: this.sessionBestLap, carIndex: this.sessionBestCar }
+      : null;
   }
 
   lastLapFor(carIdx: number): { ms: number; colour: SectorColour } | null {

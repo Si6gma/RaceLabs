@@ -27,6 +27,11 @@ export default function TrackMapViewer({ laps, currentPoint, currentPoints }: Pr
   const isDragging = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
 
+  // The hovered points change on every mouse move; the draw reads them through a ref
+  // so the main effect (canvas sizing, resize observer) is not rebuilt each time.
+  const pointsRef = useRef<CurrentPoint[]>([]);
+  pointsRef.current = currentPoints ?? (currentPoint ? [{ point: currentPoint, color: '#fff' }] : []);
+
   const scheduleDraw = useCallback(() => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
@@ -136,8 +141,7 @@ export default function TrackMapViewer({ laps, currentPoint, currentPoints }: Pr
       }
 
       // Current-point dots — drawn in screen space so they're always 5px radius
-      const pointsToDraw: CurrentPoint[] = currentPoints ?? (currentPoint ? [{ point: currentPoint, color: '#fff' }] : []);
-      pointsToDraw.forEach(({ point, color }) => {
+      pointsRef.current.forEach(({ point, color }) => {
         const sx = (point.world_position_x - cx) * S + W / 2 + panX;
         const sy = (point.world_position_y - cy) * S + H / 2 + panY;
         ctx.fillStyle = color;
@@ -167,7 +171,10 @@ export default function TrackMapViewer({ laps, currentPoint, currentPoints }: Pr
       observer.disconnect();
       drawRef.current = () => {};
     };
-  }, [laps, currentPoint]);
+  }, [laps]);
+
+  // Redraw the dots when the hovered position moves
+  useEffect(() => { scheduleDraw(); }, [currentPoint, currentPoints, scheduleDraw]);
 
   // Wheel zoom — non-passive so we can preventDefault
   useEffect(() => {

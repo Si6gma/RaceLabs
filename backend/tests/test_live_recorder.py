@@ -615,6 +615,17 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         out = ghost_speeds([{"lap_distance": i * 2.0, "world_pos_x": i * 2.0, "current_lap_time_ms": 0, "speed": 0.0} for i in range(10)])
         self.assertEqual([s["speed"] for s in out], [0.0] * 10)
 
+    def test_a_repeated_ghost_position_that_catches_up_next_packet_is_not_a_speed_change(self):
+        from app.live_recorder import ghost_speeds
+        xs = [i * 1.5 for i in range(40)]
+        xs[20] = xs[19]  # the position did not move this packet; the next one covers 3 m
+        out = ghost_speeds([
+            {"lap_distance": i * 1.5, "world_pos_x": xs[i], "current_lap_time_ms": round(i * 1000 / 60), "speed": 0.0}
+            for i in range(40)
+        ])
+        for s in out:
+            self.assertAlmostEqual(s["speed"], 1.5 * 60 * 3.6, delta=1.0)
+
     def test_ghost_speed_follows_the_path_not_the_centreline_projection(self):
         # Through a corner the lap distance lurches while the car moves evenly: 0.5 m
         # a frame along a straight line reads as 108 km/h whatever the projection does.

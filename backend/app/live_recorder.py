@@ -276,9 +276,15 @@ def ghost_speeds(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         typical = sorted(around)[len(around) // 2] if around else step
         frames.append(max(1, round(step / typical)) if typical > 0 else 1)
     points = [tuple(float(s.get(k) or 0) for k in ("world_pos_x", "world_pos_y", "world_pos_z")) for s in samples]
+    moves = [math.dist(a, b) for a, b in zip(points, points[1:])]
+    # A ghost's position sometimes repeats for one packet and catches up on the next:
+    # share that pair out evenly so the stutter does not read as a speed change.
+    for i in range(len(moves) - 1):
+        if moves[i] < 0.25 * moves[i + 1]:
+            moves[i] = moves[i + 1] = (moves[i] + moves[i + 1]) / 2
     path = [0.0]
-    for a, b in zip(points, points[1:]):
-        path.append(path[-1] + math.dist(a, b))
+    for move in moves:
+        path.append(path[-1] + move)
     elapsed = (int(samples[-1].get("current_lap_time_ms") or 0) - int(samples[0].get("current_lap_time_ms") or 0)) / 1000.0
     interval = elapsed / sum(frames)
     out: List[Dict[str, Any]] = []

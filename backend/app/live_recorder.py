@@ -214,6 +214,8 @@ GHOST_STEP_MAX_S = 0.25
 GHOST_END_M = 50.0
 # A ghost moving forward by more than this in one packet was moved by the game, not driven.
 GHOST_JUMP_M = 300.0
+# Packets either side of a sample that its derived speed is averaged over (about 0.2 s).
+GHOST_SPEED_WINDOW = 6
 
 
 def ghost_wrapped(lap: _LapInProgress, distance: float, meta: Dict[str, Any]) -> bool:
@@ -251,6 +253,23 @@ def ghost_sectors(samples: List[Dict[str, Any]], lap_time_ms: int) -> tuple:
     s2 = first[2] - s1 if s1 and 2 in first else None
     s3 = lap_time_ms - first[2] if 2 in first else None
     return s1 or None, s2 if s2 and s2 > 0 else None, s3 if s3 and s3 > 0 else None
+
+
+def ghost_speeds(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The ghost's speed as lap distance over its own clock, averaged over a window
+    of packets either side. The game only refreshes a ghost's reported speed when it
+    changes gear, so the raw value steps by 30 km/h through a braking zone."""
+    out: List[Dict[str, Any]] = []
+    last = len(samples) - 1
+    for i, s in enumerate(samples):
+        lo, hi = samples[max(0, i - GHOST_SPEED_WINDOW)], samples[min(last, i + GHOST_SPEED_WINDOW)]
+        dt = (int(hi.get("current_lap_time_ms") or 0) - int(lo.get("current_lap_time_ms") or 0)) / 1000.0
+        if dt > 0:
+            speed = (float(hi.get("lap_distance") or 0) - float(lo.get("lap_distance") or 0)) / dt * 3.6
+        else:
+            speed = float(out[-1].get("speed") or 0) if out else 0.0
+        out.append({**s, "speed": max(speed, 0.0)})
+    return out
 
 
 def _sample_dicts(lap: FinalizedLap) -> List[Dict[str, Any]]:
@@ -459,7 +478,10 @@ class LiveRecorder:
             return
         self._ghost_saved.add((index, lap_time_ms))
         s1, s2, s3 = ghost_sectors(result.samples, lap_time_ms)
-        result = replace(result, sector1_ms=s1, sector2_ms=s2, sector3_ms=s3, ghost={"car_index": index, "lap_time_ms": lap_time_ms})
+        result = replace(
+            result, samples=ghost_speeds(result.samples), sector1_ms=s1, sector2_ms=s2, sector3_ms=s3,
+            ghost={"car_index": index, "lap_time_ms": lap_time_ms},
+        )
         self._schedule(self._persist_safely(result))
 
     def _track_grid(self, lap_all: List[Dict[str, Any]]):

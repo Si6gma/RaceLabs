@@ -573,3 +573,25 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         self.drive_ghost(3, 2, lap_time_ms=83873, meta={**TT_META, "session_uid": "222"})
         await self.rec.drain()
         self.assertEqual(len(self.saved), 2)
+
+    async def test_ghost_speed_comes_from_distance_over_its_clock(self):
+        # The game only refreshes a ghost's reported speed on gear changes, so the
+        # saved speed is lap distance over the ghost's own clock: 1.5 m per 50 ms.
+        self.drive_ghost(3, 1)
+        for i in range(50):
+            self.rec.on_ghost_sample(3, sample(2, i, lap_distance=i * 1.5, speed=300.0, session_time=200.0 + i * 0.05), TT_META)
+        self.drive_ghost(3, 3, lap_time_ms=83873)
+        await self.rec.drain()
+        speeds = [s["speed"] for s in self.saved[0].samples]
+        self.assertEqual(len(speeds), 50)
+        for speed in speeds:
+            self.assertAlmostEqual(speed, 108.0, delta=1.0)
+
+    def test_ghost_speed_holds_while_the_clock_is_frozen(self):
+        from app.live_recorder import ghost_speeds
+        moving = [{"lap_distance": i * 2.0, "current_lap_time_ms": i * 100, "speed": 0.0} for i in range(10)]
+        frozen = [{"lap_distance": 18.0, "current_lap_time_ms": 900, "speed": 0.0} for _ in range(20)]
+        out = ghost_speeds(moving + frozen)
+        self.assertAlmostEqual(out[5]["speed"], 72.0, delta=0.5)
+        self.assertAlmostEqual(out[-1]["speed"], out[-2]["speed"])
+        self.assertGreaterEqual(out[-1]["speed"], 0.0)

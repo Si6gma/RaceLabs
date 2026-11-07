@@ -259,18 +259,26 @@ def ghost_speeds(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The ghost's speed as lap distance over time, averaged over a window of packets
     either side. The game only refreshes a ghost's reported speed when it changes
     gear, so the raw value steps by 30 km/h through a braking zone. A ghost replays
-    one frame per packet while the packet clock jitters, so each packet counts as
-    the lap's mean interval rather than its own clock step."""
+    one frame per packet while the packet clock jitters, so time is counted in
+    frames at the lap's mean interval; a packet that covers twice its neighbours'
+    distance is a dropped packet and counts as two frames."""
     last = len(samples) - 1
     if last < 1:
         return [{**s, "speed": 0.0} for s in samples]
+    distance = [float(s.get("lap_distance") or 0) for s in samples]
+    steps = [b - a for a, b in zip(distance, distance[1:])]
+    frames = []
+    for i, step in enumerate(steps):
+        around = steps[max(0, i - 3):i] + steps[i + 1:i + 4]
+        typical = sorted(around)[len(around) // 2] if around else step
+        frames.append(max(1, round(step / typical)) if typical > 0 else 1)
     elapsed = (int(samples[-1].get("current_lap_time_ms") or 0) - int(samples[0].get("current_lap_time_ms") or 0)) / 1000.0
-    interval = elapsed / last
+    interval = elapsed / sum(frames)
     out: List[Dict[str, Any]] = []
     for i, s in enumerate(samples):
         lo, hi = max(0, i - GHOST_SPEED_WINDOW), min(last, i + GHOST_SPEED_WINDOW)
-        dt = (hi - lo) * interval
-        dd = float(samples[hi].get("lap_distance") or 0) - float(samples[lo].get("lap_distance") or 0)
+        dt = sum(frames[lo:hi]) * interval
+        dd = distance[hi] - distance[lo]
         out.append({**s, "speed": max(dd / dt * 3.6, 0.0) if dt > 0 else 0.0})
     return out
 

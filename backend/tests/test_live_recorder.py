@@ -599,6 +599,17 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         for s in out:
             self.assertAlmostEqual(s["speed"], expected, delta=0.5)
 
+    def test_a_dropped_packet_counts_as_two_frames_not_a_burst_of_speed(self):
+        from app.live_recorder import ghost_speeds
+        distances = [i * 1.5 for i in range(41)]
+        del distances[20]  # one packet never arrived: the next step covers 3 m
+        clock = [round(i * 1000 / 60) for i in range(41)]
+        del clock[20]
+        out = ghost_speeds([{"lap_distance": d, "current_lap_time_ms": t, "speed": 0.0} for d, t in zip(distances, clock)])
+        expected = 1.5 * 60 * 3.6
+        for s in out:
+            self.assertAlmostEqual(s["speed"], expected, delta=1.0)
+
     def test_ghost_speed_is_zero_when_the_clock_never_advances(self):
         from app.live_recorder import ghost_speeds
         out = ghost_speeds([{"lap_distance": i * 2.0, "current_lap_time_ms": 0, "speed": 0.0} for i in range(10)])

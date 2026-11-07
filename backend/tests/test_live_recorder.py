@@ -579,7 +579,7 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         # saved speed is lap distance over the ghost's own clock: 1.5 m per 50 ms.
         self.drive_ghost(3, 1)
         for i in range(50):
-            self.rec.on_ghost_sample(3, sample(2, i, lap_distance=i * 1.5, speed=300.0, session_time=200.0 + i * 0.05), TT_META)
+            self.rec.on_ghost_sample(3, sample(2, i, lap_distance=i * 1.5, world_pos_x=i * 1.5, speed=300.0, session_time=200.0 + i * 0.05), TT_META)
         self.drive_ghost(3, 3, lap_time_ms=83873)
         await self.rec.drain()
         speeds = [s["speed"] for s in self.saved[0].samples]
@@ -594,7 +594,7 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         clock, steps = [0], [10, 26, 14, 20, 12, 18]
         for i in range(40):
             clock.append(clock[-1] + steps[i % len(steps)])
-        out = ghost_speeds([{"lap_distance": i * 1.5, "current_lap_time_ms": clock[i], "speed": 0.0} for i in range(40)])
+        out = ghost_speeds([{"lap_distance": i * 1.5, "world_pos_x": i * 1.5, "current_lap_time_ms": clock[i], "speed": 0.0} for i in range(40)])
         expected = 1.5 / (clock[39] / 39 / 1000) * 3.6
         for s in out:
             self.assertAlmostEqual(s["speed"], expected, delta=0.5)
@@ -605,12 +605,28 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         del distances[20]  # one packet never arrived: the next step covers 3 m
         clock = [round(i * 1000 / 60) for i in range(41)]
         del clock[20]
-        out = ghost_speeds([{"lap_distance": d, "current_lap_time_ms": t, "speed": 0.0} for d, t in zip(distances, clock)])
+        out = ghost_speeds([{"lap_distance": d, "world_pos_z": d, "current_lap_time_ms": t, "speed": 0.0} for d, t in zip(distances, clock)])
         expected = 1.5 * 60 * 3.6
         for s in out:
             self.assertAlmostEqual(s["speed"], expected, delta=1.0)
 
     def test_ghost_speed_is_zero_when_the_clock_never_advances(self):
         from app.live_recorder import ghost_speeds
-        out = ghost_speeds([{"lap_distance": i * 2.0, "current_lap_time_ms": 0, "speed": 0.0} for i in range(10)])
+        out = ghost_speeds([{"lap_distance": i * 2.0, "world_pos_x": i * 2.0, "current_lap_time_ms": 0, "speed": 0.0} for i in range(10)])
         self.assertEqual([s["speed"] for s in out], [0.0] * 10)
+
+    def test_ghost_speed_follows_the_path_not_the_centreline_projection(self):
+        # Through a corner the lap distance lurches while the car moves evenly: 0.5 m
+        # a frame along a straight line reads as 108 km/h whatever the projection does.
+        from app.live_recorder import ghost_speeds
+        lurch = [0.5] * 20 + [0.75] * 20
+        distances, d = [], 0.0
+        for step in lurch:
+            distances.append(d)
+            d += step
+        out = ghost_speeds([
+            {"lap_distance": distances[i], "world_pos_x": i * 0.3, "world_pos_z": i * 0.4, "current_lap_time_ms": round(i * 1000 / 60), "speed": 0.0}
+            for i in range(40)
+        ])
+        for s in out:
+            self.assertAlmostEqual(s["speed"], 108.0, delta=1.0)

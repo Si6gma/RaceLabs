@@ -21,6 +21,7 @@ saved: the ghost loops, the full lap comes round again.
 """
 import asyncio
 import logging
+import math
 import time
 import uuid
 from dataclasses import dataclass, field, replace
@@ -214,8 +215,9 @@ GHOST_STEP_MAX_S = 0.25
 GHOST_END_M = 50.0
 # A ghost moving forward by more than this in one packet was moved by the game, not driven.
 GHOST_JUMP_M = 300.0
-# Packets either side of a sample that its derived speed is averaged over (about 0.2 s).
-GHOST_SPEED_WINDOW = 6
+# Packets either side of a sample that its derived speed is averaged over (about 0.33 s):
+# wide enough to absorb a ghost position that repeats one packet and catches up the next.
+GHOST_SPEED_WINDOW = 10
 
 
 def ghost_wrapped(lap: _LapInProgress, distance: float, meta: Dict[str, Any]) -> bool:
@@ -256,12 +258,13 @@ def ghost_sectors(samples: List[Dict[str, Any]], lap_time_ms: int) -> tuple:
 
 
 def ghost_speeds(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The ghost's speed as lap distance over time, averaged over a window of packets
-    either side. The game only refreshes a ghost's reported speed when it changes
-    gear, so the raw value steps by 30 km/h through a braking zone. A ghost replays
-    one frame per packet while the packet clock jitters, so time is counted in
-    frames at the lap's mean interval; a packet that covers twice its neighbours'
-    distance is a dropped packet and counts as two frames."""
+    """The ghost's speed as the path through its world positions over time, averaged
+    over a window of packets either side. The game only refreshes a ghost's reported
+    speed when it changes gear, and its lap distance is a centreline projection that
+    lurches through corners, while its positions move evenly. A ghost replays one
+    frame per packet while the packet clock jitters, so time is counted in frames at
+    the lap's mean interval; a packet whose lap distance covers twice its neighbours'
+    is a dropped packet and counts as two frames."""
     last = len(samples) - 1
     if last < 1:
         return [{**s, "speed": 0.0} for s in samples]
@@ -272,14 +275,17 @@ def ghost_speeds(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         around = steps[max(0, i - 3):i] + steps[i + 1:i + 4]
         typical = sorted(around)[len(around) // 2] if around else step
         frames.append(max(1, round(step / typical)) if typical > 0 else 1)
+    points = [tuple(float(s.get(k) or 0) for k in ("world_pos_x", "world_pos_y", "world_pos_z")) for s in samples]
+    path = [0.0]
+    for a, b in zip(points, points[1:]):
+        path.append(path[-1] + math.dist(a, b))
     elapsed = (int(samples[-1].get("current_lap_time_ms") or 0) - int(samples[0].get("current_lap_time_ms") or 0)) / 1000.0
     interval = elapsed / sum(frames)
     out: List[Dict[str, Any]] = []
     for i, s in enumerate(samples):
         lo, hi = max(0, i - GHOST_SPEED_WINDOW), min(last, i + GHOST_SPEED_WINDOW)
         dt = sum(frames[lo:hi]) * interval
-        dd = distance[hi] - distance[lo]
-        out.append({**s, "speed": max(dd / dt * 3.6, 0.0) if dt > 0 else 0.0})
+        out.append({**s, "speed": (path[hi] - path[lo]) / dt * 3.6 if dt > 0 else 0.0})
     return out
 
 

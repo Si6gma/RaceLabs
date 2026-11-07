@@ -587,11 +587,19 @@ class GhostTest(unittest.IsolatedAsyncioTestCase):
         for speed in speeds:
             self.assertAlmostEqual(speed, 108.0, delta=1.0)
 
-    def test_ghost_speed_holds_while_the_clock_is_frozen(self):
+    def test_ghost_speed_uses_the_mean_packet_interval_not_the_jittery_clock(self):
+        # The ghost moves one frame per packet while the packet clock wobbles, so
+        # steady motion reads as a steady speed even when the clock steps are uneven.
         from app.live_recorder import ghost_speeds
-        moving = [{"lap_distance": i * 2.0, "current_lap_time_ms": i * 100, "speed": 0.0} for i in range(10)]
-        frozen = [{"lap_distance": 18.0, "current_lap_time_ms": 900, "speed": 0.0} for _ in range(20)]
-        out = ghost_speeds(moving + frozen)
-        self.assertAlmostEqual(out[5]["speed"], 72.0, delta=0.5)
-        self.assertAlmostEqual(out[-1]["speed"], out[-2]["speed"])
-        self.assertGreaterEqual(out[-1]["speed"], 0.0)
+        clock, steps = [0], [10, 26, 14, 20, 12, 18]
+        for i in range(40):
+            clock.append(clock[-1] + steps[i % len(steps)])
+        out = ghost_speeds([{"lap_distance": i * 1.5, "current_lap_time_ms": clock[i], "speed": 0.0} for i in range(40)])
+        expected = 1.5 / (clock[39] / 39 / 1000) * 3.6
+        for s in out:
+            self.assertAlmostEqual(s["speed"], expected, delta=0.5)
+
+    def test_ghost_speed_is_zero_when_the_clock_never_advances(self):
+        from app.live_recorder import ghost_speeds
+        out = ghost_speeds([{"lap_distance": i * 2.0, "current_lap_time_ms": 0, "speed": 0.0} for i in range(10)])
+        self.assertEqual([s["speed"] for s in out], [0.0] * 10)

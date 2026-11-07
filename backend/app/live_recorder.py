@@ -256,19 +256,22 @@ def ghost_sectors(samples: List[Dict[str, Any]], lap_time_ms: int) -> tuple:
 
 
 def ghost_speeds(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The ghost's speed as lap distance over its own clock, averaged over a window
-    of packets either side. The game only refreshes a ghost's reported speed when it
-    changes gear, so the raw value steps by 30 km/h through a braking zone."""
-    out: List[Dict[str, Any]] = []
+    """The ghost's speed as lap distance over time, averaged over a window of packets
+    either side. The game only refreshes a ghost's reported speed when it changes
+    gear, so the raw value steps by 30 km/h through a braking zone. A ghost replays
+    one frame per packet while the packet clock jitters, so each packet counts as
+    the lap's mean interval rather than its own clock step."""
     last = len(samples) - 1
+    if last < 1:
+        return [{**s, "speed": 0.0} for s in samples]
+    elapsed = (int(samples[-1].get("current_lap_time_ms") or 0) - int(samples[0].get("current_lap_time_ms") or 0)) / 1000.0
+    interval = elapsed / last
+    out: List[Dict[str, Any]] = []
     for i, s in enumerate(samples):
-        lo, hi = samples[max(0, i - GHOST_SPEED_WINDOW)], samples[min(last, i + GHOST_SPEED_WINDOW)]
-        dt = (int(hi.get("current_lap_time_ms") or 0) - int(lo.get("current_lap_time_ms") or 0)) / 1000.0
-        if dt > 0:
-            speed = (float(hi.get("lap_distance") or 0) - float(lo.get("lap_distance") or 0)) / dt * 3.6
-        else:
-            speed = float(out[-1].get("speed") or 0) if out else 0.0
-        out.append({**s, "speed": max(speed, 0.0)})
+        lo, hi = max(0, i - GHOST_SPEED_WINDOW), min(last, i + GHOST_SPEED_WINDOW)
+        dt = (hi - lo) * interval
+        dd = float(samples[hi].get("lap_distance") or 0) - float(samples[lo].get("lap_distance") or 0)
+        out.append({**s, "speed": max(dd / dt * 3.6, 0.0) if dt > 0 else 0.0})
     return out
 
 
